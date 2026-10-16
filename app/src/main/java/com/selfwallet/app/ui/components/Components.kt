@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -78,6 +79,7 @@ import com.selfwallet.app.ui.TxUi
 import com.selfwallet.app.ui.theme.CorporateBlue
 import com.selfwallet.app.ui.theme.ExpenseRed
 import com.selfwallet.app.ui.theme.IncomeGreen
+import com.selfwallet.app.ui.theme.LocalStyle
 import com.selfwallet.app.util.Currencies
 
 object CategoryIcons {
@@ -150,7 +152,7 @@ fun AmountText(
     Text(
         text,
         modifier = modifier,
-        style = style,
+        style = style.copy(fontFamily = LocalStyle.current.numberFont),
         color = if (isExpense) MaterialTheme.colorScheme.onSurface else IncomeGreen,
         maxLines = 1,
     )
@@ -287,10 +289,11 @@ fun EmptyState(icon: ImageVector, title: String, body: String, modifier: Modifie
 @Composable
 fun AppCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, content: @Composable () -> Unit) {
     val shape = MaterialTheme.shapes.large
+    val border = if (LocalStyle.current.cardBorder) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant) else null
     if (onClick != null) {
-        Surface(onClick = onClick, modifier = modifier, shape = shape, color = MaterialTheme.colorScheme.surfaceContainerLowest, tonalElevation = 0.dp) { content() }
+        Surface(onClick = onClick, modifier = modifier, shape = shape, color = MaterialTheme.colorScheme.surfaceContainerLowest, border = border) { content() }
     } else {
-        Surface(modifier = modifier, shape = shape, color = MaterialTheme.colorScheme.surfaceContainerLowest, tonalElevation = 0.dp) { content() }
+        Surface(modifier = modifier, shape = shape, color = MaterialTheme.colorScheme.surfaceContainerLowest, border = border) { content() }
     }
 }
 
@@ -381,14 +384,14 @@ fun BarChart(
 }
 
 @Composable
-fun ProgressLine(fraction: Float, color: Color, modifier: Modifier = Modifier) {
+fun ProgressLine(fraction: Float, color: Color, modifier: Modifier = Modifier, track: Color = MaterialTheme.colorScheme.surfaceContainerHigh) {
     val f by animateFloatAsState(fraction.coerceIn(0f, 1f), tween(600), label = "line")
     Box(
         modifier
             .fillMaxWidth()
             .height(6.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            .background(track),
     ) {
         Box(
             Modifier

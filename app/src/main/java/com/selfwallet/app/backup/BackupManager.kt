@@ -15,6 +15,7 @@ import androidx.work.WorkerParameters
 import com.selfwallet.app.SelfWalletApp
 import com.selfwallet.app.data.Repository
 import com.selfwallet.app.data.db.AllocationEntity
+import com.selfwallet.app.data.db.BudgetEntity
 import com.selfwallet.app.data.db.CategoryEntity
 import com.selfwallet.app.data.db.RateEntity
 import com.selfwallet.app.data.db.RuleEntity
@@ -40,6 +41,7 @@ data class BackupFile(
     val rules: List<RuleEntity>,
     val rates: List<RateEntity>,
     val transactions: List<TransactionEntity>,
+    val budgets: List<BudgetEntity> = emptyList(),
 )
 
 /**
@@ -66,6 +68,7 @@ class BackupManager(private val context: Context, private val repo: Repository) 
             rules = s.rules,
             rates = s.rates,
             transactions = s.transactions,
+            budgets = s.budgets,
         )
         val bytes = json.encodeToString(BackupFile.serializer(), file).toByteArray()
         val out = context.contentResolver.openOutputStream(uri, "wt")
@@ -90,6 +93,7 @@ class BackupManager(private val context: Context, private val repo: Repository) 
                 rules = file.rules,
                 rates = file.rates,
                 transactions = file.transactions,
+                budgets = file.budgets,
             ),
         )
         repo.settings.setBaseCurrency(file.baseCurrency)

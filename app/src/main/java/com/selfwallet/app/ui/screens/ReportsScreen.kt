@@ -24,8 +24,12 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.QueryStats
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +55,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.selfwallet.app.backup.PdfReport
+import com.selfwallet.app.data.db.Claim
 import com.selfwallet.app.data.db.SpendKind
 import com.selfwallet.app.ui.TxUi
 import com.selfwallet.app.ui.WalletState
@@ -70,7 +76,13 @@ import java.time.LocalDate
 import java.time.YearMonth
 
 @Composable
-fun ReportsScreen(state: WalletState, onExport: (Uri, List<TxUi>) -> Unit) {
+fun ReportsScreen(
+    state: WalletState,
+    onExport: (Uri, List<TxUi>) -> Unit,
+    onExportPdf: (Uri, PdfReport.Info, List<TxUi>, Boolean) -> Unit,
+) {
+    var showPdf by remember { mutableStateOf(false) }
+    var markSubmitted by remember { mutableStateOf(true) }
     var yearly by rememberSaveable { mutableStateOf(false) }
     var offset by rememberSaveable { mutableIntStateOf(0) }
     var kind by rememberSaveable { mutableStateOf("ALL") }
@@ -93,6 +105,29 @@ fun ReportsScreen(state: WalletState, onExport: (Uri, List<TxUi>) -> Unit) {
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         if (uri != null) onExport(uri, rows)
     }
+    val scopeLabel = when {
+        allocationId != 0L -> state.allocations.firstOrNull { it.id == allocationId }?.name ?: "Report"
+        kind == SpendKind.CORPORATE -> "Corporate"
+        kind == SpendKind.PERSONAL -> "Personal"
+        else -> "All spending"
+    }
+    val pdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        if (uri != null) {
+            onExportPdf(
+                uri,
+                PdfReport.Info(
+                    title = "Expense report",
+                    owner = state.settings.ownerName,
+                    scope = scopeLabel,
+                    period = title,
+                    baseCurrency = state.base,
+                ),
+                rows,
+                markSubmitted,
+            )
+        }
+    }
+    val unclaimed = rows.count { it.isExpense && it.isCorporate && Claim.of(it.tx) == Claim.NOT_CLAIMED }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -110,6 +145,9 @@ fun ReportsScreen(state: WalletState, onExport: (Uri, List<TxUi>) -> Unit) {
                         exportLauncher.launch("self-wallet-${who.lowercase().replace(' ', '-')}-${title.lowercase().replace(' ', '-')}.csv")
                     }, enabled = rows.isNotEmpty()) {
                         Icon(Icons.Filled.FileDownload, "Export CSV")
+                    }
+                    IconButton(onClick = { showPdf = true }, enabled = rows.isNotEmpty()) {
+                        Icon(Icons.Filled.PictureAsPdf, "Export PDF report")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
@@ -286,6 +324,41 @@ fun ReportsScreen(state: WalletState, onExport: (Uri, List<TxUi>) -> Unit) {
                 }
             }
         }
+    }
+
+    if (showPdf) {
+        AlertDialog(
+            onDismissRequest = { showPdf = false },
+            icon = { Icon(Icons.Filled.PictureAsPdf, null) },
+            title = { Text("PDF expense report") },
+            text = {
+                Column {
+                    Text("$scopeLabel · $title · ${rows.size} transactions. Receipt photos are added on their own pages.")
+                    if (state.settings.ownerName.isBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Tip: add your name in Settings › Your name on reports.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (unclaimed > 0) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = markSubmitted, onCheckedChange = { markSubmitted = it })
+                            Text("Mark $unclaimed corporate expense${if (unclaimed == 1) "" else "s"} as submitted")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showPdf = false
+                    pdfLauncher.launch("expense-report-${scopeLabel.lowercase().replace(' ', '-')}-${title.lowercase().replace(' ', '-')}.pdf")
+                }) { Text("Create PDF") }
+            },
+            dismissButton = { TextButton(onClick = { showPdf = false }) { Text("Cancel") } },
+        )
     }
 }
 

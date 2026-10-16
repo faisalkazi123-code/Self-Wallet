@@ -18,12 +18,17 @@ class AppContainer(context: Context) {
     private val appContext = context.applicationContext
     val settings = SettingsStore(appContext)
     val database = AppDatabase.create(appContext)
-    val repository = Repository(database, settings) {
-        scope.launch {
-            val s = settings.current()
-            if (s.autoBackup && s.backupUri != null) BackupScheduler.requestSoon(appContext)
-        }
-    }
+    val repository = Repository(
+        database,
+        settings,
+        onDataChanged = {
+            scope.launch {
+                val s = settings.current()
+                if (s.autoBackup && s.backupUri != null) BackupScheduler.requestSoon(appContext)
+            }
+        },
+        onBudgetAlert = { title, body -> Notifications.showBudget(appContext, title, body) },
+    )
     val backup = BackupManager(appContext, repository)
 }
 

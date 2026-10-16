@@ -28,6 +28,7 @@ object Notifications {
     const val ACTION_SET_KIND = "com.selfwallet.app.SET_KIND"
     const val ACTION_RESOLVE_DUP = "com.selfwallet.app.RESOLVE_DUP"
     private const val DUP_CHANNEL = "duplicates"
+    private const val BUDGET_CHANNEL = "budgets"
 
     fun createChannel(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
@@ -39,6 +40,31 @@ object Notifications {
             description = "Warns when the same payment SMS arrives twice or you may have been charged twice"
         }
         nm.createNotificationChannel(dup)
+        nm.createNotificationChannel(
+            NotificationChannel(BUDGET_CHANNEL, "Budget alerts", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "When a monthly budget reaches 80% or is exceeded"
+            },
+        )
+    }
+
+    fun showBudget(context: Context, title: String, text: String) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val pi = PendingIntent.getActivity(
+            context, 7, Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val n = NotificationCompat.Builder(context, BUDGET_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_wallet)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .setColor(0xFFB45309.toInt())
+            .build()
+        runCatching { NotificationManagerCompat.from(context).notify(title.hashCode(), n) }
     }
 
     /** [original] is the earlier transaction when [tx] is a possible duplicate. */

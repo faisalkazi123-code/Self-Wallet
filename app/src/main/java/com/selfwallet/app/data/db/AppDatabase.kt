@@ -144,6 +144,30 @@ interface RateDao {
     suspend fun deleteAll()
 }
 
+@Dao
+interface BudgetDao {
+    @Query("SELECT * FROM budgets ORDER BY categoryId IS NOT NULL, id")
+    fun observeAll(): Flow<List<BudgetEntity>>
+
+    @Query("SELECT * FROM budgets")
+    suspend fun getAll(): List<BudgetEntity>
+
+    @Upsert
+    suspend fun upsert(item: BudgetEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(items: List<BudgetEntity>)
+
+    @Delete
+    suspend fun delete(item: BudgetEntity)
+
+    @Query("DELETE FROM budgets")
+    suspend fun deleteAll()
+
+    @Query("DELETE FROM budgets WHERE categoryId = :categoryId")
+    suspend fun deleteForCategory(categoryId: Long)
+}
+
 @Database(
     entities = [
         TransactionEntity::class,
@@ -151,8 +175,9 @@ interface RateDao {
         AllocationEntity::class,
         RuleEntity::class,
         RateEntity::class,
+        BudgetEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -161,11 +186,12 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun allocations(): AllocationDao
     abstract fun rules(): RuleDao
     abstract fun rates(): RateDao
+    abstract fun budgets(): BudgetDao
 
     companion object {
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "self_wallet.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -173,6 +199,18 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE transactions ADD COLUMN duplicateOf INTEGER")
                 db.execSQL("ALTER TABLE transactions ADD COLUMN dupKind TEXT")
                 db.execSQL("ALTER TABLE transactions ADD COLUMN dupStatus TEXT")
+            }
+        }
+
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN receiptPath TEXT")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN claimStatus TEXT")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `budgets` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`categoryId` INTEGER, `kind` TEXT NOT NULL, `amount` REAL NOT NULL, " +
+                        "`alertedMonth` TEXT, `alertedLevel` INTEGER NOT NULL)",
+                )
             }
         }
     }

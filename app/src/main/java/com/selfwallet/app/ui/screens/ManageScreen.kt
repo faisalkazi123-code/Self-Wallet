@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CurrencyExchange
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Savings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,7 +69,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.selfwallet.app.data.Budgets
 import com.selfwallet.app.data.db.AllocationEntity
+import com.selfwallet.app.data.db.BudgetEntity
 import com.selfwallet.app.data.db.CategoryEntity
 import com.selfwallet.app.data.db.RateEntity
 import com.selfwallet.app.data.db.RuleEntity
@@ -80,6 +83,7 @@ import com.selfwallet.app.ui.components.CategoryIcons
 import com.selfwallet.app.ui.components.EmptyState
 import com.selfwallet.app.ui.components.IconBadge
 import com.selfwallet.app.ui.components.Palette
+import com.selfwallet.app.ui.components.ProgressLine
 import com.selfwallet.app.ui.components.asColor
 import com.selfwallet.app.util.Currencies
 
@@ -89,11 +93,13 @@ fun ManageScreen(vm: WalletViewModel, state: WalletState, what: String, onBack: 
     var editingAllocation by remember { mutableStateOf<AllocationEntity?>(null) }
     var editingRule by remember { mutableStateOf<RuleEntity?>(null) }
     var editingRate by remember { mutableStateOf<RateEntity?>(null) }
+    var editingBudget by remember { mutableStateOf<BudgetEntity?>(null) }
 
     val title = when (what) {
         "allocations" -> "Expense for"
         "rules" -> "Auto-categorise rules"
         "rates" -> "Exchange rates"
+        "budgets" -> "Monthly budgets"
         else -> "Categories"
     }
 
@@ -102,6 +108,11 @@ fun ManageScreen(vm: WalletViewModel, state: WalletState, what: String, onBack: 
             "allocations" -> editingAllocation = AllocationEntity(name = "", kind = SpendKind.CORPORATE, color = Palette[13], sortOrder = state.allocations.size)
             "rules" -> editingRule = RuleEntity(keyword = "")
             "rates" -> editingRate = RateEntity(currency = state.missingRates.firstOrNull() ?: "", rate = 0.0)
+            "budgets" -> editingBudget = BudgetEntity(
+                categoryId = null,
+                kind = if (state.budgets.any { it.budget.categoryId == null && it.budget.kind == Budgets.ALL }) SpendKind.PERSONAL else Budgets.ALL,
+                amount = 0.0,
+            )
             else -> editingCategory = CategoryEntity(name = "", icon = "other", color = Palette[0], sortOrder = state.categories.size)
         }
     }
@@ -158,6 +169,42 @@ fun ManageScreen(vm: WalletViewModel, state: WalletState, what: String, onBack: 
                             subtitle = listOfNotNull(c?.name, a?.name, r.renameTo?.takeIf { it.isNotBlank() }?.let { "rename to $it" }).joinToString(" · ").ifEmpty { "No action" },
                             onClick = { editingRule = r },
                         )
+                    }
+                }
+                "budgets" -> {
+                    item {
+                        Hint("Set a monthly limit for all spending, for personal or corporate, or for a single category. You get a notification at 80% and when you go over. Amounts are in ${state.base}.")
+                    }
+                    if (state.budgets.isEmpty()) {
+                        item { EmptyState(Icons.Filled.Savings, "No budgets yet", "Tap + to set your first monthly limit.") }
+                    }
+                    items(state.budgets, key = { it.budget.id }) { b ->
+                        val over = b.fraction >= 1f
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { editingBudget = b.budget }
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(b.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                                Text(
+                                    "${Currencies.format(b.spent, state.base)} / ${Currencies.format(b.budget.amount, state.base)}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            ProgressLine(
+                                b.fraction,
+                                when {
+                                    over -> MaterialTheme.colorScheme.error
+                                    b.fraction >= 0.8f -> Color(0xFFD97706)
+                                    else -> MaterialTheme.colorScheme.primary
+                                },
+                            )
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                     }
                 }
                 "rates" -> {
@@ -231,6 +278,15 @@ fun ManageScreen(vm: WalletViewModel, state: WalletState, what: String, onBack: 
             onSave = { vm.saveRule(it); editingRule = null },
             onDelete = if (r.id != 0L) ({ vm.deleteRule(r); editingRule = null }) else null,
             onDismiss = { editingRule = null },
+        )
+    }
+    editingBudget?.let { b ->
+        BudgetDialog(
+            initial = b,
+            state = state,
+            onSave = { vm.saveBudget(it); editingBudget = null },
+            onDelete = if (b.id != 0L) ({ vm.deleteBudget(b); editingBudget = null }) else null,
+            onDismiss = { editingBudget = null },
         )
     }
     editingRate?.let { r ->
@@ -485,6 +541,72 @@ private fun RuleDialog(initial: RuleEntity, state: WalletState, onSave: (RuleEnt
                     label = { Text("Rename merchant to (optional)") },
                     modifier = Modifier.fillMaxWidth(),
                 )
+            }
+        },
+        confirmButton = confirm,
+        dismissButton = dismiss,
+    )
+}
+
+@Composable
+private fun BudgetDialog(
+    initial: BudgetEntity,
+    state: WalletState,
+    onSave: (BudgetEntity) -> Unit,
+    onDelete: (() -> Unit)?,
+    onDismiss: () -> Unit,
+) {
+    var categoryId by remember { mutableStateOf(initial.categoryId) }
+    var kind by remember { mutableStateOf(initial.kind) }
+    var amount by remember { mutableStateOf(if (initial.amount > 0) trimRate(initial.amount) else "") }
+    val value = amount.replace(',', '.').toDoubleOrNull()
+    val (confirm, dismiss) = DialogActions(
+        canSave = value != null && value > 0,
+        onSave = { onSave(initial.copy(categoryId = categoryId, kind = kind, amount = value ?: 0.0)) },
+        onDelete = onDelete,
+        onDismiss = onDismiss,
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Filled.Savings, null) },
+        title = { Text(if (initial.id == 0L) "New budget" else "Edit budget") },
+        text = {
+            Column(
+                Modifier
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                OutlinedTextField(
+                    value = amount,
+                    onValueChange = { amount = it },
+                    label = { Text("Monthly limit") },
+                    suffix = { Text(state.base) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("Applies to", style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.height(4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(Budgets.ALL to "All spending", SpendKind.PERSONAL to "Personal", SpendKind.CORPORATE to "Corporate").forEach { (k, l) ->
+                        FilterChip(selected = kind == k, onClick = { kind = k }, label = { Text(l) })
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("Category", style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.height(4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = categoryId == null, onClick = { categoryId = null }, label = { Text("All categories") })
+                    state.categories.filter { it.type == TxType.EXPENSE }.forEach { c ->
+                        FilterChip(
+                            selected = categoryId == c.id,
+                            onClick = { categoryId = c.id },
+                            label = { Text(c.name) },
+                            leadingIcon = { Icon(CategoryIcons.of(c.icon), null, Modifier.size(16.dp), tint = c.color.asColor()) },
+                        )
+                    }
+                }
             }
         },
         confirmButton = confirm,

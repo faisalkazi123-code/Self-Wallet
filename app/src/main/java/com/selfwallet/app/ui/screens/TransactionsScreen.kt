@@ -19,7 +19,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Paid
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -58,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.selfwallet.app.data.db.Claim
 import com.selfwallet.app.data.db.TransactionEntity
 import com.selfwallet.app.data.db.TxSource
 import com.selfwallet.app.ui.TxUi
@@ -77,6 +80,7 @@ private val filters = listOf(
     "personal" to "Personal",
     "corporate" to "Corporate",
     "dups" to "Duplicates",
+    "claims" to "To claim",
     "review" to "To review",
     "sms" to "From SMS",
 )
@@ -91,6 +95,7 @@ fun TransactionsScreen(
     onUndoDelete: (TransactionEntity) -> Unit,
     onMarkReviewed: (List<TransactionEntity>) -> Unit,
     onToggleKind: (TxUi) -> Unit,
+    onSetClaim: (List<TransactionEntity>, String) -> Unit,
     snackbar: SnackbarHostState,
 ) {
     var filter by rememberSaveable(initialFilter) { mutableStateOf(initialFilter ?: "all") }
@@ -114,6 +119,7 @@ fun TransactionsScreen(
                     "corporate" -> it.isCorporate
                     "review" -> it.tx.needsReview
                     "dups" -> it.isPendingDuplicate
+                    "claims" -> it.awaitingClaim
                     "sms" -> it.tx.source == TxSource.SMS
                     else -> true
                 }
@@ -151,6 +157,14 @@ fun TransactionsScreen(
                         IconButton(onClick = { searching = false; query = "" }) { Icon(Icons.Filled.Close, "Close search") }
                     } else {
                         IconButton(onClick = { searching = true }) { Icon(Icons.Filled.Search, "Search") }
+                    }
+                    if (filter == "claims" && shown.isNotEmpty()) {
+                        IconButton(onClick = { onSetClaim(shown.map { it.tx }, Claim.SUBMITTED) }) {
+                            Icon(Icons.AutoMirrored.Filled.Send, "Mark all as submitted")
+                        }
+                        IconButton(onClick = { onSetClaim(shown.map { it.tx }, Claim.REIMBURSED) }) {
+                            Icon(Icons.Filled.Paid, "Mark all as paid back")
+                        }
                     }
                     if (filter == "review" && shown.isNotEmpty()) {
                         IconButton(onClick = { onMarkReviewed(shown.map { it.tx }) }) { Icon(Icons.Filled.DoneAll, "Mark all reviewed") }

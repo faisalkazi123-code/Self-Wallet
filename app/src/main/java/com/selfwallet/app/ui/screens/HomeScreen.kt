@@ -3,6 +3,7 @@
 package com.selfwallet.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,7 +58,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.selfwallet.app.data.db.SpendKind
+import com.selfwallet.app.ui.BudgetUi
 import com.selfwallet.app.ui.TxUi
+import com.selfwallet.app.ui.theme.LocalStyle
+import com.selfwallet.app.util.Currencies
 import com.selfwallet.app.ui.WalletState
 import com.selfwallet.app.ui.components.AppCard
 import com.selfwallet.app.ui.components.DonutChart
@@ -94,6 +98,8 @@ fun HomeScreen(
     onSeeAll: () -> Unit,
     onReview: () -> Unit,
     onDuplicates: () -> Unit,
+    onClaims: () -> Unit,
+    onBudgets: () -> Unit,
     onFixRates: () -> Unit,
     onToggleHide: () -> Unit,
 ) {
@@ -160,6 +166,9 @@ fun HomeScreen(
                     spent = money(spent, base, hidden),
                     income = money(income, base, hidden),
                     net = money(income - spent, base, hidden),
+                    budget = if (kind == "ALL") state.overallBudget else null,
+                    base = base,
+                    hidden = hidden,
                 )
             }
             if (state.pendingDuplicates > 0) {
@@ -198,7 +207,24 @@ fun HomeScreen(
                 }
             }
             if (kind == "ALL") {
-                item { SplitCards(allMonth, base, hidden) }
+                item { SplitCards(allMonth, base, hidden, toClaim = state.toClaim, onClaims = onClaims) }
+                val categoryBudgets = state.budgets.filter { it != state.overallBudget }
+                if (categoryBudgets.isNotEmpty()) {
+                    item {
+                        SectionTitle("Budgets") {
+                            TextButton(onClick = onBudgets) { Text("Manage") }
+                        }
+                    }
+                    item {
+                        AppCard(Modifier.padding(horizontal = 16.dp)) {
+                            Column(Modifier.padding(vertical = 8.dp)) {
+                                categoryBudgets.sortedByDescending { it.fraction }.take(4).forEach { b ->
+                                    BudgetRow(b, base, hidden)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if (state.items.isEmpty()) {
                 item {
@@ -252,54 +278,90 @@ private fun greeting(): String = when (LocalTime.now().hour) {
 }
 
 @Composable
-private fun HeroCard(title: String, spent: String, income: String, net: String) {
+private fun HeroCard(title: String, spent: String, income: String, net: String, budget: BudgetUi?, base: String, hidden: Boolean) {
+    val paper = LocalStyle.current.isPaper
+    // Calm Teal: a solid accent card. Paper Ledger: an outlined ledger card in ink.
+    val bg = if (paper) MaterialTheme.colorScheme.surfaceContainerLowest else MaterialTheme.colorScheme.primary
+    val ink = if (paper) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimary
+    val soft = ink.copy(alpha = 0.75f)
     Box(
         Modifier
             .padding(horizontal = 16.dp)
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.extraLarge)
-            .background(Brush.linearGradient(listOf(Color(0xFF14B8A6), Teal, Ink)))
-            .padding(24.dp),
+            .background(bg)
+            .then(if (paper) Modifier.border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.extraLarge) else Modifier)
+            .padding(22.dp),
     ) {
         Column {
-            Text(title, color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.titleSmall)
+            Text(if (paper) title.uppercase() else title, color = soft, style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(6.dp))
             Text(
                 spent,
-                color = Color.White,
-                style = MaterialTheme.typography.displaySmall,
+                color = ink,
+                style = MaterialTheme.typography.displaySmall.copy(fontFamily = LocalStyle.current.numberFont),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(20.dp))
+            if (budget != null) {
+                Spacer(Modifier.height(14.dp))
+                Row {
+                    Text("Monthly budget", color = soft, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                    Text(
+                        if (hidden) "${(budget.fraction * 100).toInt()}%" else "${(budget.fraction * 100).toInt()}% of ${Currencies.format(budget.budget.amount, base)}",
+                        color = soft,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                ProgressLine(
+                    budget.fraction,
+                    when {
+                        budget.fraction >= 1f -> Color(0xFFFB7185)
+                        budget.fraction >= 0.8f -> Color(0xFFFBBF24)
+                        paper -> MaterialTheme.colorScheme.primary
+                        else -> Color(0xFFFDE68A)
+                    },
+                    track = ink.copy(alpha = 0.18f),
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            if (paper) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(if (paper) 12.dp else 0.dp))
             Row(Modifier.fillMaxWidth()) {
-                HeroStat(Icons.Filled.ArrowDownward, "Income", income, Modifier.weight(1f))
-                HeroStat(Icons.Filled.ArrowUpward, "Net", net, Modifier.weight(1f))
+                HeroStat(Icons.Filled.ArrowDownward, "Income", income, ink, Modifier.weight(1f))
+                HeroStat(Icons.Filled.ArrowUpward, "Net", net, ink, Modifier.weight(1f))
             }
         }
     }
 }
 
 @Composable
-private fun HeroStat(icon: ImageVector, label: String, value: String, modifier: Modifier) {
+private fun HeroStat(icon: ImageVector, label: String, value: String, ink: Color, modifier: Modifier) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
                 .size(32.dp)
                 .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.18f)),
+                .background(ink.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center,
-        ) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(16.dp)) }
+        ) { Icon(icon, null, tint = ink, modifier = Modifier.size(16.dp)) }
         Spacer(Modifier.width(10.dp))
         Column {
-            Text(label, color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelMedium)
-            Text(value, color = Color.White, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(label, color = ink.copy(alpha = 0.75f), style = MaterialTheme.typography.labelMedium)
+            Text(
+                value,
+                color = ink,
+                style = MaterialTheme.typography.titleSmall.copy(fontFamily = LocalStyle.current.numberFont),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
 
 @Composable
-private fun SplitCards(items: List<TxUi>, base: String, hidden: Boolean) {
+private fun SplitCards(items: List<TxUi>, base: String, hidden: Boolean, toClaim: Double, onClaims: () -> Unit) {
     val personal = items.filter { it.isExpense && !it.isCorporate }.sumOf { it.base }
     val corporate = items.filter { it.isExpense && it.isCorporate }.sumOf { it.base }
     val total = (personal + corporate).takeIf { it > 0 } ?: 1.0
@@ -310,13 +372,54 @@ private fun SplitCards(items: List<TxUi>, base: String, hidden: Boolean) {
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         SplitCard(Icons.Filled.Person, "Personal", money(personal, base, hidden), (personal / total).toFloat(), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
-        SplitCard(Icons.Filled.Business, "Corporate", money(corporate, base, hidden), (corporate / total).toFloat(), CorporateBlue, Modifier.weight(1f))
+        SplitCard(
+            Icons.Filled.Business, "Corporate", money(corporate, base, hidden), (corporate / total).toFloat(), CorporateBlue, Modifier.weight(1f),
+            footnote = if (toClaim > 0) "${money(toClaim, base, hidden)} to claim" else null,
+            onClick = if (toClaim > 0) onClaims else null,
+        )
     }
 }
 
 @Composable
-private fun SplitCard(icon: ImageVector, label: String, value: String, fraction: Float, color: Color, modifier: Modifier) {
-    AppCard(modifier) {
+private fun BudgetRow(b: BudgetUi, base: String, hidden: Boolean) {
+    val over = b.fraction >= 1f
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(b.name, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                when {
+                    hidden -> "${(b.fraction * 100).toInt()}%"
+                    over -> "${Currencies.format(-b.left, base)} over"
+                    else -> "${Currencies.format(b.left, base)} left"
+                },
+                style = MaterialTheme.typography.labelLarge.copy(fontFamily = LocalStyle.current.numberFont),
+                color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        ProgressLine(
+            b.fraction,
+            when {
+                over -> MaterialTheme.colorScheme.error
+                b.fraction >= 0.8f -> Color(0xFFD97706)
+                else -> MaterialTheme.colorScheme.primary
+            },
+        )
+    }
+}
+
+@Composable
+private fun SplitCard(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    fraction: Float,
+    color: Color,
+    modifier: Modifier,
+    footnote: String? = null,
+    onClick: (() -> Unit)? = null,
+) {
+    AppCard(modifier, onClick = onClick) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(icon, null, tint = color, modifier = Modifier.size(18.dp))
@@ -324,9 +427,18 @@ private fun SplitCard(icon: ImageVector, label: String, value: String, fraction:
                 Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(8.dp))
-            Text(value, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = LocalStyle.current.numberFont),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Spacer(Modifier.height(10.dp))
             ProgressLine(fraction, color)
+            if (footnote != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(footnote, style = MaterialTheme.typography.labelMedium, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }

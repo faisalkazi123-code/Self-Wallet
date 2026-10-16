@@ -3,6 +3,7 @@ package com.selfwallet.app.data
 import androidx.room.withTransaction
 import com.selfwallet.app.data.db.AllocationEntity
 import com.selfwallet.app.data.db.AppDatabase
+import com.selfwallet.app.data.db.BudgetEntity
 import com.selfwallet.app.data.db.CategoryEntity
 import com.selfwallet.app.data.db.RateEntity
 import com.selfwallet.app.data.db.RuleEntity
@@ -12,6 +13,9 @@ import com.selfwallet.app.data.db.TxSource
 import com.selfwallet.app.data.db.TxType
 import com.selfwallet.app.data.prefs.SettingsStore
 import com.selfwallet.app.sms.SmsParser
+import com.selfwallet.app.util.Currencies
+import com.selfwallet.app.util.Dates
+import java.time.YearMonth
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -21,12 +25,15 @@ class Repository(
     private val db: AppDatabase,
     val settings: SettingsStore,
     private val onDataChanged: () -> Unit,
+    /** Shows a notification when a budget reaches 80% or 100% this month. */
+    private val onBudgetAlert: (title: String, body: String) -> Unit = { _, _ -> },
 ) {
     val transactions: Flow<List<TransactionEntity>> = db.transactions().observeAll()
     val categories: Flow<List<CategoryEntity>> = db.categories().observeAll()
     val allocations: Flow<List<AllocationEntity>> = db.allocations().observeAll()
     val rules: Flow<List<RuleEntity>> = db.rules().observeAll()
     val rates: Flow<List<RateEntity>> = db.rates().observeAll()
+    val budgets: Flow<List<BudgetEntity>> = db.budgets().observeAll()
 
     private val seedLock = Mutex()
 
@@ -50,6 +57,7 @@ class Repository(
     suspend fun saveTransaction(tx: TransactionEntity): Long {
         val id = db.transactions().upsert(tx)
         onDataChanged()
+        if (tx.type == TxType.EXPENSE) checkBudgets()
         return if (tx.id != 0L) tx.id else id
     }
 
@@ -115,7 +123,10 @@ class Repository(
         ).let { if (dup != null) it.copy(categoryId = it.categoryId ?: dup.of.categoryId, allocationId = dup.of.allocationId ?: it.allocationId) else it }
         val id = db.transactions().insert(tx)
         if (id <= 0) return null
-        if (notifyChange) onDataChanged()
+        if (notifyChange) {
+            onDataChanged()
+            if (type == TxType.EXPENSE) checkBudgets()
+        }
         return tx.copy(id = id)
     }
 
@@ -164,6 +175,7 @@ class Repository(
     suspend fun deleteCategory(c: CategoryEntity) {
         db.withTransaction {
             db.transactions().clearCategory(c.id)
+            db.budgets().deleteForCategory(c.id)
             db.categories().delete(c)
         }
         onDataChanged()
@@ -182,6 +194,55 @@ class Repository(
     suspend fun deleteRule(r: RuleEntity) { db.rules().delete(r); onDataChanged() }
 
     suspend fun saveRate(r: RateEntity) { db.rates().upsert(r); onDataChanged() }
+
+    suspend fun saveBudget(b: BudgetEntity) {
+        // A changed limit should be able to alert again this month.
+        db.budgets().upsert(b.copy(alertedMonth = null, alertedLevel = 0))
+        onDataChanged()
+        checkBudgets()
+    }
+    suspend fun deleteBudget(b: BudgetEntity) { db.budgets().delete(b); onDataChanged() }
+
+    /** Sets the reimbursement status of several corporate expenses at once. */
+    suspend fun setClaimStatus(ids: Collection<Long>, status: String) {
+        db.withTransaction {
+            ids.forEach { id -> db.transactions().get(id)?.let { db.transactions().upsert(it.copy(claimStatus = status)) } }
+        }
+        onDataChanged()
+    }
+
+    /** Notifies once per month per level (80% / 100%) for each budget. */
+    suspend fun checkBudgets() {
+        val budgets = db.budgets().getAll()
+        if (budgets.isEmpty()) return
+        val month = YearMonth.now()
+        val range = Dates.monthRange(month)
+        val base = settings.current().baseCurrency
+        val rates = db.rates().getAll().associate { it.currency to it.rate }
+        val allocations = db.allocations().getAll().associateBy { it.id }
+        val categories = db.categories().getAll().associateBy { it.id }
+        val lines = db.transactions().getAll()
+            .filter { it.type == TxType.EXPENSE && it.timestamp in range && !DuplicateCheck.isUncounted(it) }
+            .map {
+                val rate = if (it.currency == base) 1.0 else rates[it.currency] ?: 1.0
+                Budgets.Line(it.amount * rate, it.categoryId, it.allocationId?.let { a -> allocations[a] }?.kind == SpendKind.CORPORATE)
+            }
+        budgets.forEach { b ->
+            val spent = Budgets.spent(b, lines)
+            val level = Budgets.level(spent, b.amount)
+            val already = if (b.alertedMonth == month.toString()) b.alertedLevel else 0
+            if (level > already) {
+                db.budgets().upsert(b.copy(alertedMonth = month.toString(), alertedLevel = level))
+                val name = Budgets.name(b, b.categoryId?.let { categories[it]?.name })
+                val limit = Currencies.format(b.amount, base)
+                if (level >= 100) {
+                    onBudgetAlert("Over budget: $name", "You've spent ${Currencies.format(spent, base)} of $limit this month.")
+                } else {
+                    onBudgetAlert("80% of budget used: $name", "${Currencies.format(spent, base)} of $limit spent · ${Currencies.format(b.amount - spent, base)} left this month.")
+                }
+            }
+        }
+    }
     suspend fun deleteRate(r: RateEntity) { db.rates().delete(r); onDataChanged() }
 
     /** Creates or updates a rule for [keyword] after the user categorised an SMS transaction. */
@@ -226,6 +287,7 @@ class Repository(
         rules = db.rules().getAll(),
         rates = db.rates().getAll(),
         transactions = db.transactions().getAll(),
+        budgets = db.budgets().getAll(),
     )
 
     suspend fun replaceAll(s: Snapshot) {
@@ -235,11 +297,13 @@ class Repository(
             db.rates().deleteAll()
             db.categories().deleteAll()
             db.allocations().deleteAll()
+            db.budgets().deleteAll()
             db.categories().insertAll(s.categories)
             db.allocations().insertAll(s.allocations)
             db.rules().insertAll(s.rules)
             db.rates().insertAll(s.rates)
             db.transactions().insertAll(s.transactions)
+            db.budgets().insertAll(s.budgets)
         }
     }
 
@@ -249,6 +313,7 @@ class Repository(
         val rules: List<RuleEntity>,
         val rates: List<RateEntity>,
         val transactions: List<TransactionEntity>,
+        val budgets: List<BudgetEntity> = emptyList(),
     )
 
     private fun hash(s: String): String {

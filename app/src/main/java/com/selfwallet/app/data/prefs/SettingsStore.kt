@@ -32,6 +32,11 @@ data class Settings(
     val autoBackup: Boolean = true,
     val lastBackupAt: Long = 0,
     val hideAmounts: Boolean = false,
+    /** AppStyle.TEAL or AppStyle.PAPER. */
+    val appStyle: String = "TEAL",
+    val appLock: Boolean = false,
+    /** Shown on PDF expense reports. */
+    val ownerName: String = "",
 )
 
 class SettingsStore(private val context: Context) {
@@ -49,6 +54,9 @@ class SettingsStore(private val context: Context) {
         val autoBackup = booleanPreferencesKey("auto_backup")
         val lastBackupAt = longPreferencesKey("last_backup_at")
         val hideAmounts = booleanPreferencesKey("hide_amounts")
+        val appStyle = stringPreferencesKey("app_style")
+        val appLock = booleanPreferencesKey("app_lock")
+        val ownerName = stringPreferencesKey("owner_name")
     }
 
     val settings: Flow<Settings> = context.dataStore.data.map { it.toSettings() }
@@ -68,6 +76,9 @@ class SettingsStore(private val context: Context) {
         autoBackup = this[Keys.autoBackup] ?: true,
         lastBackupAt = this[Keys.lastBackupAt] ?: 0L,
         hideAmounts = this[Keys.hideAmounts] ?: false,
+        appStyle = this[Keys.appStyle] ?: "TEAL",
+        appLock = this[Keys.appLock] ?: false,
+        ownerName = this[Keys.ownerName] ?: "",
     )
 
     suspend fun setOnboardingDone(done: Boolean) = context.dataStore.edit { it[Keys.onboardingDone] = done }
@@ -80,6 +91,9 @@ class SettingsStore(private val context: Context) {
     suspend fun setAutoBackup(on: Boolean) = context.dataStore.edit { it[Keys.autoBackup] = on }
     suspend fun setLastBackupAt(time: Long) = context.dataStore.edit { it[Keys.lastBackupAt] = time }
     suspend fun setHideAmounts(on: Boolean) = context.dataStore.edit { it[Keys.hideAmounts] = on }
+    suspend fun setAppStyle(style: String) = context.dataStore.edit { it[Keys.appStyle] = style }
+    suspend fun setAppLock(on: Boolean) = context.dataStore.edit { it[Keys.appLock] = on }
+    suspend fun setOwnerName(name: String) = context.dataStore.edit { it[Keys.ownerName] = name }
 
     suspend fun setBackupTarget(uri: String?, label: String?) = context.dataStore.edit {
         if (uri == null) {

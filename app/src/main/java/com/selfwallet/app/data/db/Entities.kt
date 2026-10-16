@@ -48,6 +48,41 @@ data class TransactionEntity(
     val dupKind: String? = null,
     /** DuplicateCheck.PENDING until the user decides, then KEEP. */
     val dupStatus: String? = null,
+    /** Absolute path of a receipt photo in the app's private storage. */
+    val receiptPath: String? = null,
+    /** Claim.* for corporate expenses; null means not claimed yet. */
+    val claimStatus: String? = null,
+)
+
+/** Reimbursement progress of a corporate expense. */
+object Claim {
+    const val NOT_CLAIMED = "NOT_CLAIMED"
+    const val SUBMITTED = "SUBMITTED"
+    const val REIMBURSED = "REIMBURSED"
+
+    fun of(tx: TransactionEntity): String = tx.claimStatus ?: NOT_CLAIMED
+
+    fun label(status: String) = when (status) {
+        SUBMITTED -> "Submitted"
+        REIMBURSED -> "Paid back"
+        else -> "Not claimed"
+    }
+}
+
+/**
+ * Monthly spending limit in the base currency. [categoryId] null = all categories;
+ * [kind] narrows it to personal or corporate spending ("ALL" = both).
+ */
+@Serializable
+@Entity(tableName = "budgets")
+data class BudgetEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val categoryId: Long? = null,
+    val kind: String = "ALL",
+    val amount: Double,
+    /** "2026-10": the month the last alert was sent for, with [alertedLevel] 80 or 100. */
+    val alertedMonth: String? = null,
+    val alertedLevel: Int = 0,
 )
 
 @Serializable

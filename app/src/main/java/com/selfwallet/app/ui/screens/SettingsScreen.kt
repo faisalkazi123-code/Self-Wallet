@@ -31,6 +31,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Savings
+import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Category
@@ -55,6 +59,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -85,12 +90,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.selfwallet.app.BuildConfig
+import com.selfwallet.app.MainActivity
 import com.selfwallet.app.backup.BackupFile
 import com.selfwallet.app.backup.BackupManager
 import com.selfwallet.app.data.db.SpendKind
 import com.selfwallet.app.data.prefs.ThemeMode
 import com.selfwallet.app.ui.WalletState
 import com.selfwallet.app.ui.WalletViewModel
+import com.selfwallet.app.ui.theme.AppStyle
 import com.selfwallet.app.util.Currencies
 import com.selfwallet.app.util.Dates
 import kotlinx.coroutines.launch
@@ -138,6 +145,8 @@ fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -
 
     var showBaseCurrency by remember { mutableStateOf(false) }
     var showTheme by remember { mutableStateOf(false) }
+    var showStyle by remember { mutableStateOf(false) }
+    var showName by remember { mutableStateOf(false) }
     var showScan by remember { mutableStateOf(false) }
     var showDefaultAlloc by remember { mutableStateOf(false) }
     var showStorageHelp by remember { mutableStateOf<String?>(null) }
@@ -257,6 +266,13 @@ fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -
                 Divider()
                 NavRow(Icons.Filled.AutoAwesome, "Auto-categorise rules", "${state.rules.size} rule${if (state.rules.size == 1) "" else "s"}") { onManage("rules") }
                 Divider()
+                NavRow(
+                    Icons.Filled.Savings, "Monthly budgets",
+                    if (state.budgets.isEmpty()) "Get alerts at 80% and 100%" else "${state.budgets.size} set",
+                ) { onManage("budgets") }
+                Divider()
+                NavRow(Icons.Filled.Badge, "Your name on reports", s.ownerName.ifBlank { "Not set · shown on PDF expense reports" }) { showName = true }
+                Divider()
                 NavRow(Icons.Filled.CurrencyExchange, "Exchange rates", if (state.missingRates.isEmpty()) "${state.rates.size} set" else "Missing: ${state.missingRates.joinToString()}") { onManage("rates") }
                 Divider()
                 NavRow(Icons.AutoMirrored.Filled.Label, "Base currency", "${s.baseCurrency} · ${Currencies.info(s.baseCurrency).name}") { showBaseCurrency = true }
@@ -287,6 +303,11 @@ fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -
             // ---------------- Appearance ----------------
             Group("Appearance & privacy") {
                 NavRow(
+                    Icons.Filled.Style, "Style",
+                    if (s.appStyle == AppStyle.PAPER) "Paper Ledger · warm paper, serif & typewriter numbers" else "Calm Teal · soft cards, rounded & colourful",
+                ) { showStyle = true }
+                Divider()
+                NavRow(
                     Icons.Filled.DarkMode, "Theme",
                     when (s.themeMode) { ThemeMode.LIGHT -> "Light"; ThemeMode.DARK -> "Dark"; else -> "Follow system" },
                 ) { showTheme = true }
@@ -296,6 +317,18 @@ fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -
                 }
                 Divider()
                 SwitchRow(Icons.Filled.Lock, "Hide amounts", "Mask balances on screen and in notifications", checked = s.hideAmounts) { vm.setHideAmounts(it) }
+                Divider()
+                SwitchRow(
+                    Icons.Filled.Fingerprint, "App lock",
+                    "Ask for fingerprint, face or screen lock when opening the app",
+                    checked = s.appLock,
+                ) { on ->
+                    if (on && !MainActivity.canAuthenticate(context)) {
+                        showStorageHelp = "Set up a fingerprint, face unlock or screen lock in your phone's settings first."
+                    } else {
+                        vm.setAppLock(on)
+                    }
+                }
             }
 
             Group("About") {
@@ -316,6 +349,33 @@ fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -
             recent = (state.items.map { it.tx.currency } + state.rates.map { it.currency }).distinct().take(6),
             onPick = { vm.setBaseCurrency(it); showBaseCurrency = false },
             onDismiss = { showBaseCurrency = false },
+        )
+    }
+
+    if (showStyle) {
+        ChoiceDialog(
+            title = "Style",
+            options = listOf(AppStyle.TEAL to "Calm Teal", AppStyle.PAPER to "Paper Ledger"),
+            selected = s.appStyle,
+            onPick = { vm.setAppStyle(it); showStyle = false },
+            onDismiss = { showStyle = false },
+        )
+    }
+
+    if (showName) {
+        var name by remember { mutableStateOf(s.ownerName) }
+        AlertDialog(
+            onDismissRequest = { showName = false },
+            title = { Text("Your name") },
+            text = {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it }, singleLine = true,
+                    label = { Text("Name / employee ID") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = { TextButton(onClick = { vm.setOwnerName(name); showName = false }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { showName = false }) { Text("Cancel") } },
         )
     }
 
@@ -354,7 +414,7 @@ fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -
         } else {
             AlertDialog(
                 onDismissRequest = { showStorageHelp = null },
-                title = { Text("Can't use that file") },
+                title = { Text("Heads up") },
                 text = { Text(target) },
                 confirmButton = { TextButton(onClick = { showStorageHelp = null }) { Text("OK") } },
             )

@@ -138,6 +138,8 @@ private fun MainShell(vm: WalletViewModel, state: WalletState, openTxId: Long, o
                     onSeeAll = { nav.goToTab("transactions") },
                     onReview = { nav.navigate(Routes.transactions("review")) { launchSingleTop = true } },
                     onDuplicates = { nav.navigate(Routes.transactions("dups")) { launchSingleTop = true } },
+                    onClaims = { nav.navigate(Routes.transactions("claims")) { launchSingleTop = true } },
+                    onBudgets = { nav.navigate(Routes.manage("budgets")) },
                     onFixRates = { nav.navigate(Routes.manage("rates")) },
                     onToggleHide = { vm.setHideAmounts(!state.settings.hideAmounts) },
                 )
@@ -155,11 +157,16 @@ private fun MainShell(vm: WalletViewModel, state: WalletState, openTxId: Long, o
                     onUndoDelete = { vm.restoreTransaction(it) },
                     onMarkReviewed = { vm.markReviewed(it) },
                     onToggleKind = { vm.toggleSpendKind(it) },
+                    onSetClaim = { list, status -> vm.setClaimStatus(list, status) },
                     snackbar = snackbar,
                 )
             }
             composable("reports") {
-                ReportsScreen(state = state, onExport = { uri, rows -> vm.exportCsv(uri, rows) })
+                ReportsScreen(
+                    state = state,
+                    onExport = { uri, rows -> vm.exportCsv(uri, rows) },
+                    onExportPdf = { uri, info, rows, mark -> vm.exportPdf(uri, info, rows, mark) },
+                )
             }
             composable("settings") {
                 SettingsScreen(vm = vm, state = state, onManage = { nav.navigate(Routes.manage(it)) })

@@ -2,6 +2,10 @@
 
 package com.selfwallet.app.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +41,8 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -88,6 +94,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.selfwallet.app.data.db.Claim
+import com.selfwallet.app.util.Receipts
 import com.selfwallet.app.data.DuplicateCheck
 import com.selfwallet.app.data.db.SpendKind
 import com.selfwallet.app.data.db.TransactionEntity
@@ -130,7 +143,27 @@ fun EditTransactionScreen(
     var allocationId by rememberSaveable { mutableLongStateOf(state.settings.defaultAllocationId) }
     var timestamp by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
     var learn by rememberSaveable { mutableStateOf(true) }
+    var claim by rememberSaveable { mutableStateOf(Claim.NOT_CLAIMED) }
+    var receiptPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingCapture by rememberSaveable { mutableStateOf<String?>(null) }
+    var showReceipt by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val path = pendingCapture
+        pendingCapture = null
+        if (ok && path != null) {
+            scope.launch {
+                Receipts.normalize(path)
+                receiptPath = path
+            }
+        } else {
+            Receipts.delete(path)
+        }
+    }
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scope.launch { Receipts.importFrom(context, uri)?.let { receiptPath = it } }
+    }
     val currentKind = state.allocations.firstOrNull { it.id == allocationId }?.kind ?: SpendKind.PERSONAL
 
     var showCurrency by remember { mutableStateOf(false) }
@@ -152,6 +185,8 @@ fun EditTransactionScreen(
                 allocationId = tx.allocationId ?: 0L
                 timestamp = tx.timestamp
                 learn = tx.needsReview
+                claim = Claim.of(tx)
+                receiptPath = tx.receiptPath
                 loaded = true
             }
         } else {
@@ -175,6 +210,8 @@ fun EditTransactionScreen(
             merchant = merchant.trim(),
             note = note.trim(),
             timestamp = timestamp,
+            receiptPath = receiptPath,
+            claimStatus = if (currentKind == SpendKind.CORPORATE && type == TxType.EXPENSE) claim else base.claimStatus,
         )
         val keyword = if (fromSms && learn && merchant.isNotBlank()) merchant.trim() else null
         vm.saveTransaction(tx, keyword)
@@ -414,6 +451,80 @@ fun EditTransactionScreen(
                 )
             }
 
+            // ---- claim status (corporate expenses) ----
+            if (currentKind == SpendKind.CORPORATE && type == TxType.EXPENSE) {
+                Text(
+                    "Reimbursement",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 8.dp),
+                )
+                SingleChoiceSegmentedButtonRow(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                ) {
+                    listOf(Claim.NOT_CLAIMED, Claim.SUBMITTED, Claim.REIMBURSED).forEachIndexed { i, c ->
+                        SegmentedButton(
+                            selected = claim == c,
+                            onClick = { claim = c },
+                            shape = SegmentedButtonDefaults.itemShape(i, 3),
+                        ) { Text(Claim.label(c), maxLines = 1) }
+                    }
+                }
+            }
+
+            // ---- receipt ----
+            Text(
+                "Receipt",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 8.dp),
+            )
+            val rp = receiptPath
+            if (rp != null && Receipts.exists(rp)) {
+                ReceiptThumb(
+                    path = rp,
+                    onOpen = { showReceipt = true },
+                    onRemove = {
+                        Receipts.delete(rp)
+                        receiptPath = null
+                    },
+                )
+            } else {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val (file, uri) = Receipts.newCaptureTarget(context)
+                            pendingCapture = file.absolutePath
+                            takePhoto.launch(uri)
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp),
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        Icon(Icons.Filled.PhotoCamera, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Take photo")
+                    }
+                    OutlinedButton(
+                        onClick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp),
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        Icon(Icons.Filled.PhotoLibrary, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("From gallery")
+                    }
+                }
+            }
+
             // ---- note ----
             OutlinedTextField(
                 value = note,
@@ -510,6 +621,10 @@ fun EditTransactionScreen(
         }
     }
 
+    if (showReceipt && receiptPath != null) {
+        ReceiptViewer(path = receiptPath!!, onDismiss = { showReceipt = false })
+    }
+
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -524,6 +639,78 @@ fun EditTransactionScreen(
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
+    }
+}
+
+@Composable
+private fun ReceiptThumb(path: String, onOpen: () -> Unit, onRemove: () -> Unit) {
+    var bmp by remember(path) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(path) { bmp = Receipts.load(path, 600) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            onClick = onOpen,
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.size(width = 96.dp, height = 120.dp),
+        ) {
+            bmp?.let {
+                Image(
+                    bitmap = it.asImageBitmap(),
+                    contentDescription = "Receipt photo",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Receipt attached", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Text(
+                "Included in PDF expense reports",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(4.dp))
+            Row {
+                TextButton(onClick = onOpen) { Text("View") }
+                TextButton(onClick = onRemove) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReceiptViewer(path: String, onDismiss: () -> Unit) {
+    var bmp by remember(path) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(path) { bmp = Receipts.load(path, 2000) }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center,
+        ) {
+            bmp?.let {
+                Image(
+                    bitmap = it.asImageBitmap(),
+                    contentDescription = "Receipt photo",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
+            ) { Icon(Icons.Filled.Close, "Close", tint = Color.White) }
+        }
     }
 }
 

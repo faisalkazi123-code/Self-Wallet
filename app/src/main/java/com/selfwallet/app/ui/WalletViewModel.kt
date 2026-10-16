@@ -6,7 +6,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.selfwallet.app.SelfWalletApp
 import com.selfwallet.app.backup.BackupFile
+import com.selfwallet.app.backup.PdfReport
+import com.selfwallet.app.data.Budgets
 import com.selfwallet.app.data.DuplicateCheck
+import com.selfwallet.app.data.db.BudgetEntity
+import com.selfwallet.app.data.db.Claim
+import com.selfwallet.app.util.Dates
+import java.time.YearMonth
 import com.selfwallet.app.backup.BackupScheduler
 import com.selfwallet.app.backup.CsvExporter
 import com.selfwallet.app.data.db.AllocationEntity
@@ -37,6 +43,18 @@ data class TxUi(
     val isCorporate get() = allocation?.kind == SpendKind.CORPORATE
     /** Flagged as a possible duplicate and waiting for the user to decide. */
     val isPendingDuplicate get() = tx.dupStatus == DuplicateCheck.PENDING
+    /** Corporate expense the company hasn't paid back yet. */
+    val awaitingClaim get() = isExpense && isCorporate && Claim.of(tx) != Claim.REIMBURSED
+}
+
+/** A budget with this month's progress. */
+data class BudgetUi(
+    val budget: BudgetEntity,
+    val name: String,
+    val spent: Double,
+) {
+    val fraction: Float get() = if (budget.amount > 0) (spent / budget.amount).toFloat() else 0f
+    val left: Double get() = budget.amount - spent
 }
 
 data class WalletState(
@@ -47,12 +65,16 @@ data class WalletState(
     val allocations: List<AllocationEntity> = emptyList(),
     val rules: List<RuleEntity> = emptyList(),
     val rates: List<RateEntity> = emptyList(),
+    val budgets: List<BudgetUi> = emptyList(),
     /** Currencies used by transactions that have no exchange rate to the base currency yet. */
     val missingRates: List<String> = emptyList(),
 ) {
     val base get() = settings.baseCurrency
     val pendingReview get() = items.count { it.tx.needsReview }
     val pendingDuplicates get() = items.count { it.isPendingDuplicate }
+    val toClaim get() = items.filter { it.awaitingClaim }.sumOf { it.base }
+    /** The overall monthly budget (all categories, all spending), if one is set. */
+    val overallBudget get() = budgets.firstOrNull { it.budget.categoryId == null && it.budget.kind == Budgets.ALL }
     fun rateOf(code: String): Double =
         if (code == base) 1.0 else rates.firstOrNull { it.currency == code }?.rate ?: 1.0
 }
@@ -69,8 +91,8 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
     private val _events = MutableSharedFlow<UiEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<UiEvent> = _events
 
-    private val lists = combine(repo.categories, repo.allocations, repo.rules, repo.rates) { c, a, r, x ->
-        Lists(c, a, r, x)
+    private val lists = combine(repo.categories, repo.allocations, repo.rules, repo.rates, repo.budgets) { c, a, r, x, b ->
+        Lists(c, a, r, x, b)
     }
 
     val state: StateFlow<WalletState> =
@@ -97,6 +119,7 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
                 allocations = l.allocations,
                 rules = l.rules,
                 rates = l.rates,
+                budgets = budgetProgress(l.budgets, items, cats),
                 missingRates = missing.sorted(),
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, WalletState())
@@ -106,10 +129,21 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
         val allocations: List<AllocationEntity>,
         val rules: List<RuleEntity>,
         val rates: List<RateEntity>,
+        val budgets: List<BudgetEntity>,
     )
 
     init {
         viewModelScope.launch { repo.ensureSeeded() }
+    }
+
+    private fun budgetProgress(budgets: List<BudgetEntity>, items: List<TxUi>, cats: Map<Long, CategoryEntity>): List<BudgetUi> {
+        if (budgets.isEmpty()) return emptyList()
+        val range = Dates.monthRange(YearMonth.now())
+        val lines = items.filter { it.isExpense && it.tx.timestamp in range }
+            .map { Budgets.Line(it.base, it.tx.categoryId, it.isCorporate) }
+        return budgets.map { b ->
+            BudgetUi(b, Budgets.name(b, b.categoryId?.let { cats[it]?.name }), Budgets.spent(b, lines))
+        }
     }
 
     private fun toast(text: String) { _events.tryEmit(UiEvent.Message(text)) }
@@ -176,6 +210,17 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
     fun setSmsNotify(on: Boolean) = viewModelScope.launch { settings.setSmsNotify(on) }
     fun setDefaultAllocation(id: Long) = viewModelScope.launch { settings.setDefaultAllocation(id) }
     fun setHideAmounts(on: Boolean) = viewModelScope.launch { settings.setHideAmounts(on) }
+    fun setAppStyle(style: String) = viewModelScope.launch { settings.setAppStyle(style) }
+    fun setAppLock(on: Boolean) = viewModelScope.launch { settings.setAppLock(on) }
+    fun setOwnerName(name: String) = viewModelScope.launch { settings.setOwnerName(name.trim()) }
+
+    fun saveBudget(b: BudgetEntity) = viewModelScope.launch { repo.saveBudget(b) }
+    fun deleteBudget(b: BudgetEntity) = viewModelScope.launch { repo.deleteBudget(b) }
+
+    fun setClaimStatus(items: List<TransactionEntity>, status: String) = viewModelScope.launch {
+        repo.setClaimStatus(items.map { it.id }, status)
+        toast("${items.size} expense${if (items.size == 1) "" else "s"} marked ${Claim.label(status).lowercase()}")
+    }
     fun setAutoBackup(on: Boolean) = viewModelScope.launch {
         settings.setAutoBackup(on)
         if (on) BackupScheduler.ensureDaily(getApplication())
@@ -232,5 +277,17 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
             )
         }.onSuccess { toast("Exported ${rows.size} rows") }
             .onFailure { toast("Export failed: ${it.message}") }
+    }
+
+    fun exportPdf(uri: Uri, info: PdfReport.Info, rows: List<TxUi>, markSubmitted: Boolean) = viewModelScope.launch {
+        runCatching { PdfReport.write(getApplication(), uri, info, rows) }
+            .onSuccess {
+                if (markSubmitted) {
+                    val pending = rows.filter { it.isExpense && it.isCorporate && Claim.of(it.tx) == Claim.NOT_CLAIMED }
+                    if (pending.isNotEmpty()) repo.setClaimStatus(pending.map { it.tx.id }, Claim.SUBMITTED)
+                }
+                toast("PDF report saved")
+            }
+            .onFailure { toast("PDF export failed: ${it.message}") }
     }
 }

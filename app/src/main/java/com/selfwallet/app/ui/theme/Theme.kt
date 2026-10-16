@@ -11,9 +11,12 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -82,7 +85,87 @@ private val DarkColors = darkColorScheme(
     error = Color(0xFFFB7185),
 )
 
-private val AppTypography = Typography().run {
+// ---- C · Paper Ledger: warm paper, ink, vermilion, serif headings and typewriter numbers ----
+
+val Vermilion = Color(0xFFB4401E)
+
+private val PaperLight = lightColorScheme(
+    primary = Vermilion,
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFFBE3D9),
+    onPrimaryContainer = Color(0xFF5C2A1A),
+    secondary = Color(0xFF5B5146),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFE9E1D3),
+    onSecondaryContainer = Color(0xFF24201B),
+    tertiary = Color(0xFF1E4FA8),
+    tertiaryContainer = Color(0xFFDCE6F7),
+    onTertiaryContainer = Color(0xFF13305F),
+    background = Color(0xFFF3EEE4),
+    onBackground = Color(0xFF24201B),
+    surface = Color(0xFFF3EEE4),
+    onSurface = Color(0xFF24201B),
+    surfaceVariant = Color(0xFFE6DED0),
+    onSurfaceVariant = Color(0xFF5E564C),
+    surfaceContainerLowest = Color(0xFFFFFDF8),
+    surfaceContainerLow = Color(0xFFF8F3EA),
+    surfaceContainer = Color(0xFFEFE8DC),
+    surfaceContainerHigh = Color(0xFFE8E0D2),
+    surfaceContainerHighest = Color(0xFFE1D8C8),
+    outline = Color(0xFF8C8273),
+    outlineVariant = Color(0xFFCFC5B5),
+    error = Color(0xFFB3261E),
+    errorContainer = Color(0xFFFBE3D9),
+    onErrorContainer = Color(0xFF7A2710),
+)
+
+private val PaperDark = darkColorScheme(
+    primary = Color(0xFFF0936E),
+    onPrimary = Color(0xFF4A1606),
+    primaryContainer = Color(0xFF6B2A15),
+    onPrimaryContainer = Color(0xFFFBE3D9),
+    secondary = Color(0xFFD6CCBD),
+    onSecondary = Color(0xFF2E2922),
+    secondaryContainer = Color(0xFF453D33),
+    onSecondaryContainer = Color(0xFFEDE6DA),
+    tertiary = Color(0xFF9DB8EA),
+    tertiaryContainer = Color(0xFF233B66),
+    onTertiaryContainer = Color(0xFFDCE6F7),
+    background = Color(0xFF1B1814),
+    onBackground = Color(0xFFEDE6DA),
+    surface = Color(0xFF1B1814),
+    onSurface = Color(0xFFEDE6DA),
+    surfaceVariant = Color(0xFF3A342C),
+    onSurfaceVariant = Color(0xFFC9BFB0),
+    surfaceContainerLowest = Color(0xFF14120F),
+    surfaceContainerLow = Color(0xFF221E19),
+    surfaceContainer = Color(0xFF27221C),
+    surfaceContainerHigh = Color(0xFF302A23),
+    surfaceContainerHighest = Color(0xFF3A332B),
+    outline = Color(0xFF9A9082),
+    outlineVariant = Color(0xFF4A4238),
+    error = Color(0xFFF2B8B5),
+    errorContainer = Color(0xFF5C2A1A),
+    onErrorContainer = Color(0xFFFBE3D9),
+)
+
+object AppStyle {
+    const val TEAL = "TEAL"
+    const val PAPER = "PAPER"
+}
+
+/** Style-specific choices that Material's color/type/shape tokens don't cover. */
+data class StyleTokens(
+    val isPaper: Boolean,
+    /** Font for money amounts. */
+    val numberFont: FontFamily,
+    /** Paper cards are outlined; Teal cards are filled. */
+    val cardBorder: Boolean,
+)
+
+val LocalStyle = staticCompositionLocalOf { StyleTokens(isPaper = false, numberFont = FontFamily.Default, cardBorder = false) }
+
+private val TealTypography = Typography().run {
     copy(
         displaySmall = displaySmall.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp),
         headlineLarge = headlineLarge.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp),
@@ -94,7 +177,20 @@ private val AppTypography = Typography().run {
     )
 }
 
-private val AppShapes = Shapes(
+private val PaperTypography = Typography().run {
+    val serif = FontFamily.Serif
+    copy(
+        displaySmall = displaySmall.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, letterSpacing = (-1).sp),
+        headlineLarge = headlineLarge.copy(fontFamily = serif, fontWeight = FontWeight.Bold),
+        headlineMedium = headlineMedium.copy(fontFamily = serif, fontWeight = FontWeight.Bold),
+        headlineSmall = headlineSmall.copy(fontFamily = serif, fontWeight = FontWeight.Bold),
+        titleLarge = titleLarge.copy(fontFamily = serif, fontWeight = FontWeight.Bold),
+        titleMedium = titleMedium.copy(fontFamily = serif, fontWeight = FontWeight.Bold),
+        labelLarge = labelLarge.copy(fontWeight = FontWeight.SemiBold),
+    )
+}
+
+private val TealShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(12.dp),
     medium = RoundedCornerShape(16.dp),
@@ -102,7 +198,22 @@ private val AppShapes = Shapes(
     extraLarge = RoundedCornerShape(32.dp),
 )
 
-val AmountStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = 40.sp, letterSpacing = (-1).sp)
+private val PaperShapes = Shapes(
+    extraSmall = RoundedCornerShape(2.dp),
+    small = RoundedCornerShape(4.dp),
+    medium = RoundedCornerShape(6.dp),
+    large = RoundedCornerShape(8.dp),
+    extraLarge = RoundedCornerShape(10.dp),
+)
+
+/** Big amount style, using the current style's number font. */
+val AmountStyle: TextStyle
+    @Composable get() = TextStyle(
+        fontFamily = LocalStyle.current.numberFont,
+        fontWeight = FontWeight.Bold,
+        fontSize = 40.sp,
+        letterSpacing = (-1).sp,
+    )
 
 @Composable
 fun isAppInDarkTheme(themeMode: String): Boolean = when (themeMode) {
@@ -115,16 +226,32 @@ fun isAppInDarkTheme(themeMode: String): Boolean = when (themeMode) {
 fun SelfWalletTheme(
     themeMode: String = ThemeMode.SYSTEM,
     dynamicColor: Boolean = false,
+    style: String = AppStyle.TEAL,
     content: @Composable () -> Unit,
 ) {
     val dark = isAppInDarkTheme(themeMode)
+    val paper = style == AppStyle.PAPER
     val colors = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        // Material You colours only apply to the Teal style; Paper keeps its own palette.
+        !paper && dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val ctx = LocalContext.current
             if (dark) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
         }
+        paper -> if (dark) PaperDark else PaperLight
         dark -> DarkColors
         else -> LightColors
     }
-    MaterialTheme(colorScheme = colors, typography = AppTypography, shapes = AppShapes, content = content)
+    val tokens = StyleTokens(
+        isPaper = paper,
+        numberFont = if (paper) FontFamily.Monospace else FontFamily.Default,
+        cardBorder = paper,
+    )
+    CompositionLocalProvider(LocalStyle provides tokens) {
+        MaterialTheme(
+            colorScheme = colors,
+            typography = if (paper) PaperTypography else TealTypography,
+            shapes = if (paper) PaperShapes else TealShapes,
+            content = content,
+        )
+    }
 }
