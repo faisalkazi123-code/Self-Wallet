@@ -13,6 +13,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.selfwallet.app.MainActivity
 import com.selfwallet.app.R
+import com.selfwallet.app.data.db.SpendKind
 import com.selfwallet.app.data.db.TransactionEntity
 import com.selfwallet.app.data.db.TxType
 import com.selfwallet.app.util.Currencies
@@ -20,6 +21,8 @@ import com.selfwallet.app.util.Currencies
 object Notifications {
     private const val CHANNEL = "auto_added"
     const val EXTRA_TX_ID = "tx_id"
+    const val EXTRA_KIND = "kind"
+    private const val ACTION_SET_KIND = "com.selfwallet.app.SET_KIND"
 
     fun createChannel(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
@@ -45,16 +48,32 @@ object Notifications {
         val amount = if (hideAmount) "••••" else Currencies.format(tx.amount, tx.currency)
         val verb = if (tx.type == TxType.INCOME) "Received" else "Spent"
         val title = "$verb $amount" + if (tx.merchant.isNotBlank()) " · ${tx.merchant}" else ""
-        val text = if (tx.needsReview) "Added automatically. Tap to pick a category." else "Added automatically from SMS."
+        val text = if (tx.type == TxType.EXPENSE) "Personal or corporate? Tap a button below, or open to edit." else "Added automatically from SMS."
 
-        val n = NotificationCompat.Builder(context, CHANNEL)
+        fun kindAction(kind: String, label: String, requestOffset: Int): NotificationCompat.Action {
+            val i = Intent(context, NotificationActionReceiver::class.java).apply {
+                action = ACTION_SET_KIND
+                putExtra(EXTRA_TX_ID, tx.id)
+                putExtra(EXTRA_KIND, kind)
+            }
+            val p = PendingIntent.getBroadcast(
+                context, tx.id.toInt() * 4 + requestOffset, i,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            return NotificationCompat.Action.Builder(0, label, p).build()
+        }
+
+        val builder = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_wallet)
             .setContentTitle(title)
             .setContentText(text)
             .setAutoCancel(true)
             .setContentIntent(pi)
             .setColor(0xFF0F766E.toInt())
-            .build()
-        runCatching { NotificationManagerCompat.from(context).notify(tx.id.toInt(), n) }
+        if (tx.type == TxType.EXPENSE) {
+            builder.addAction(kindAction(SpendKind.PERSONAL, "Personal", 1))
+            builder.addAction(kindAction(SpendKind.CORPORATE, "Corporate", 2))
+        }
+        runCatching { NotificationManagerCompat.from(context).notify(tx.id.toInt(), builder.build()) }
     }
 }

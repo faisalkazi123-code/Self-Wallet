@@ -124,6 +124,16 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteTransaction(tx: TransactionEntity) = viewModelScope.launch { repo.deleteTransaction(tx) }
     fun restoreTransaction(tx: TransactionEntity) = viewModelScope.launch { repo.saveTransaction(tx) }
 
+    /** Flips a transaction between Personal and Corporate. */
+    fun toggleSpendKind(item: TxUi) = viewModelScope.launch {
+        val kind = if (item.isCorporate) SpendKind.PERSONAL else SpendKind.CORPORATE
+        repo.setSpendKind(item.tx.id, kind)?.let {
+            toast("Moved to ${it.name} · ${if (kind == SpendKind.CORPORATE) "Corporate" else "Personal"}")
+        }
+    }
+
+    suspend fun destinationFor(kind: String): AllocationEntity = repo.destinationFor(kind)
+
     fun markReviewed(items: List<TransactionEntity>) = viewModelScope.launch {
         items.forEach { repo.saveTransaction(it.copy(needsReview = false)) }
     }

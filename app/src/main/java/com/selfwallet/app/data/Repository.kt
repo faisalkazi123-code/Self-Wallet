@@ -106,6 +106,36 @@ class Repository(
 
     fun notifyChanged() = onDataChanged()
 
+    /**
+     * Returns the destination a transaction should use for [kind]: the SMS default when it
+     * matches, otherwise the first one of that kind. A "Company" destination is created when the
+     * user asks for corporate but has none.
+     */
+    suspend fun destinationFor(kind: String): AllocationEntity {
+        val all = db.allocations().getAll()
+        val defaultId = settings.current().defaultAllocationId
+        all.firstOrNull { it.kind == kind && it.id == defaultId }?.let { return it }
+        all.firstOrNull { it.kind == kind }?.let { return it }
+        val created = AllocationEntity(
+            name = if (kind == SpendKind.CORPORATE) "Company" else "Personal",
+            kind = kind,
+            color = if (kind == SpendKind.CORPORATE) 0xFF2563EB else 0xFF0F766E,
+            sortOrder = all.size,
+        )
+        val id = db.allocations().upsert(created)
+        onDataChanged()
+        return created.copy(id = id)
+    }
+
+    /** Moves a transaction between personal and corporate. Returns the new destination. */
+    suspend fun setSpendKind(txId: Long, kind: String): AllocationEntity? {
+        val tx = db.transactions().get(txId) ?: return null
+        val target = destinationFor(kind)
+        db.transactions().upsert(tx.copy(allocationId = target.id))
+        onDataChanged()
+        return target
+    }
+
     // ---- categories / allocations / rules / rates ----------------------------------------
 
     suspend fun saveCategory(c: CategoryEntity) { db.categories().upsert(c); onDataChanged() }

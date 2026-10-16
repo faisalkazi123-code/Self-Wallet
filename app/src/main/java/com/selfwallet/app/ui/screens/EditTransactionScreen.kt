@@ -70,6 +70,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -96,6 +97,7 @@ import com.selfwallet.app.ui.theme.AmountStyle
 import com.selfwallet.app.ui.theme.CorporateBlue
 import com.selfwallet.app.util.Currencies
 import com.selfwallet.app.util.Dates
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -124,6 +126,8 @@ fun EditTransactionScreen(
     var allocationId by rememberSaveable { mutableLongStateOf(state.settings.defaultAllocationId) }
     var timestamp by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
     var learn by rememberSaveable { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
+    val currentKind = state.allocations.firstOrNull { it.id == allocationId }?.kind ?: SpendKind.PERSONAL
 
     var showCurrency by remember { mutableStateOf(false) }
     var showDate by remember { mutableStateOf(false) }
@@ -232,6 +236,17 @@ fun EditTransactionScreen(
                 }
             }
 
+            // ---- personal / corporate ----
+            Spacer(Modifier.height(12.dp))
+            KindToggle(
+                kind = currentKind,
+                onPick = { k ->
+                    if (k != currentKind) {
+                        scope.launch { allocationId = vm.destinationFor(k).id }
+                    }
+                },
+            )
+
             // ---- amount ----
             Column(
                 Modifier
@@ -336,18 +351,21 @@ fun EditTransactionScreen(
             }
 
             // ---- allocation ----
-            PickerHeader(if (type == TxType.EXPENSE) "Expense for" else "Belongs to", onManage = { onManage("allocations") })
+            PickerHeader(
+                if (currentKind == SpendKind.CORPORATE) "Which company / client" else "Personal: for whom",
+                onManage = { onManage("allocations") },
+            )
             FlowRow(
                 Modifier.padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                state.allocations.forEach { a ->
+                state.allocations.filter { it.kind == currentKind }.forEach { a ->
                     val selected = allocationId == a.id
                     val corporate = a.kind == SpendKind.CORPORATE
                     FilterChip(
                         selected = selected,
-                        onClick = { allocationId = if (selected) 0L else a.id },
+                        onClick = { allocationId = a.id },
                         label = { Text(a.name) },
                         leadingIcon = {
                             Icon(
@@ -484,6 +502,43 @@ fun EditTransactionScreen(
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
+    }
+}
+
+@Composable
+private fun KindToggle(kind: String, onPick: (String) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        listOf(
+            Triple(SpendKind.PERSONAL, "Personal", Icons.Filled.Person),
+            Triple(SpendKind.CORPORATE, "Corporate", Icons.Filled.Business),
+        ).forEach { (k, label, icon) ->
+            val selected = kind == k
+            val accent = if (k == SpendKind.CORPORATE) CorporateBlue else MaterialTheme.colorScheme.primary
+            Surface(
+                onClick = { onPick(k) },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(52.dp),
+                shape = MaterialTheme.shapes.medium,
+                color = if (selected) accent else MaterialTheme.colorScheme.surfaceContainerLowest,
+                border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Icon(icon, null, tint = if (selected) Color.White else accent, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
     }
 }
 

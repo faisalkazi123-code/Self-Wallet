@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Business
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
@@ -63,6 +65,7 @@ import com.selfwallet.app.ui.WalletState
 import com.selfwallet.app.ui.components.EmptyState
 import com.selfwallet.app.ui.components.TransactionRow
 import com.selfwallet.app.ui.components.money
+import com.selfwallet.app.ui.theme.CorporateBlue
 import com.selfwallet.app.util.Dates
 import kotlinx.coroutines.launch
 import java.time.YearMonth
@@ -86,6 +89,7 @@ fun TransactionsScreen(
     onDelete: (TransactionEntity) -> Unit,
     onUndoDelete: (TransactionEntity) -> Unit,
     onMarkReviewed: (List<TransactionEntity>) -> Unit,
+    onToggleKind: (TxUi) -> Unit,
     snackbar: SnackbarHostState,
 ) {
     var filter by rememberSaveable(initialFilter) { mutableStateOf(initialFilter ?: "all") }
@@ -232,6 +236,7 @@ fun TransactionsScreen(
                                 item = item,
                                 hidden = hidden,
                                 onOpen = { onOpen(item.tx.id) },
+                                onToggleKind = { onToggleKind(item) },
                                 onDelete = {
                                     onDelete(item.tx)
                                     scope.launch {
@@ -272,32 +277,61 @@ private fun MonthSwitcher(label: String, onPrev: () -> Unit, onNext: () -> Unit,
 }
 
 @Composable
-private fun SwipeRow(item: TxUi, hidden: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
+private fun SwipeRow(item: TxUi, hidden: Boolean, onOpen: () -> Unit, onToggleKind: () -> Unit, onDelete: () -> Unit) {
     val dismiss = rememberSwipeToDismissBoxState(
         confirmValueChange = {
-            if (it == SwipeToDismissBoxValue.EndToStart) {
-                onDelete()
-                true
-            } else {
-                false
+            when (it) {
+                SwipeToDismissBoxValue.EndToStart -> {
+                    onDelete()
+                    true
+                }
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    // Swipe right flips Personal <-> Corporate; the row springs back.
+                    onToggleKind()
+                    false
+                }
+                else -> false
             }
         },
     )
     SwipeToDismissBox(
         state = dismiss,
-        enableDismissFromStartToEnd = false,
         backgroundContent = {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.errorContainer)
-                    .padding(horizontal = 24.dp),
-                contentAlignment = Alignment.CenterEnd,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Delete", color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.labelLarge)
-                    Spacer(Modifier.width(8.dp))
-                    Icon(Icons.Filled.Delete, null, tint = MaterialTheme.colorScheme.onErrorContainer)
+            if (dismiss.dismissDirection == SwipeToDismissBoxValue.StartToEnd) {
+                val toCorporate = !item.isCorporate
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(if (toCorporate) CorporateBlue.copy(alpha = 0.18f) else MaterialTheme.colorScheme.primaryContainer)
+                        .padding(horizontal = 24.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (toCorporate) Icons.Filled.Business else Icons.Filled.Person, null,
+                            tint = if (toCorporate) CorporateBlue else MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (toCorporate) "Mark as Corporate" else "Mark as Personal",
+                            color = if (toCorporate) CorporateBlue else MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                }
+            } else {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.errorContainer)
+                        .padding(horizontal = 24.dp),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Delete", color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.labelLarge)
+                        Spacer(Modifier.width(8.dp))
+                        Icon(Icons.Filled.Delete, null, tint = MaterialTheme.colorScheme.onErrorContainer)
+                    }
                 }
             }
         },

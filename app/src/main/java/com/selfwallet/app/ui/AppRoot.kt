@@ -153,6 +153,7 @@ private fun MainShell(vm: WalletViewModel, state: WalletState, openTxId: Long, o
                     onDelete = { vm.deleteTransaction(it) },
                     onUndoDelete = { vm.restoreTransaction(it) },
                     onMarkReviewed = { vm.markReviewed(it) },
+                    onToggleKind = { vm.toggleSpendKind(it) },
                     snackbar = snackbar,
                 )
             }
