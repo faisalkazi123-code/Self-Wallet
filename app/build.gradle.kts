@@ -11,12 +11,12 @@ val ciVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNul
 
 android {
     namespace = "com.selfwallet.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.selfwallet.app"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = ciVersionCode
         versionName = "1.0.$ciVersionCode"
         vectorDrawables { useSupportLibrary = true }
@@ -44,6 +44,16 @@ android {
             enableV2Signing = true
             enableV3Signing = true
         }
+        // Google Play upload key: private, only ever used for the Play bundle (see docs/google-play).
+        create("play") {
+            val ksPath = System.getenv("PLAY_KEYSTORE_PATH")
+            if (!ksPath.isNullOrBlank() && file(ksPath).exists()) {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("PLAY_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("PLAY_KEY_ALIAS")
+                keyPassword = System.getenv("PLAY_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -52,6 +62,12 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
+        }
+        // ./gradlew bundlePlay -> Play-ready .aab signed with the private upload key.
+        create("play") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("play")
+            matchingFallbacks += "release"
         }
         debug {
             applicationIdSuffix = ".debug"
