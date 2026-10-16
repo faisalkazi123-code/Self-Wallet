@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.selfwallet.app.SelfWalletApp
 import com.selfwallet.app.backup.BackupFile
+import com.selfwallet.app.data.DuplicateCheck
 import com.selfwallet.app.backup.BackupScheduler
 import com.selfwallet.app.backup.CsvExporter
 import com.selfwallet.app.data.db.AllocationEntity
@@ -34,6 +35,8 @@ data class TxUi(
 ) {
     val isExpense get() = tx.type == TxType.EXPENSE
     val isCorporate get() = allocation?.kind == SpendKind.CORPORATE
+    /** Flagged as a possible duplicate and waiting for the user to decide. */
+    val isPendingDuplicate get() = tx.dupStatus == DuplicateCheck.PENDING
 }
 
 data class WalletState(
@@ -49,6 +52,7 @@ data class WalletState(
 ) {
     val base get() = settings.baseCurrency
     val pendingReview get() = items.count { it.tx.needsReview }
+    val pendingDuplicates get() = items.count { it.isPendingDuplicate }
     fun rateOf(code: String): Double =
         if (code == base) 1.0 else rates.firstOrNull { it.currency == code }?.rate ?: 1.0
 }
@@ -81,7 +85,9 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
                     rates[t.currency] != null -> rates.getValue(t.currency).rate
                     else -> { missing += t.currency; 1.0 }
                 }
-                TxUi(t, t.categoryId?.let { cats[it] }, t.allocationId?.let { allocs[it] }, t.amount * rate)
+                // An unconfirmed repeat SMS is listed but not counted in any total.
+                val counted = if (DuplicateCheck.isUncounted(t)) 0.0 else t.amount * rate
+                TxUi(t, t.categoryId?.let { cats[it] }, t.allocationId?.let { allocs[it] }, counted)
             }
             WalletState(
                 loaded = true,
@@ -133,6 +139,11 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun destinationFor(kind: String): AllocationEntity = repo.destinationFor(kind)
+
+    fun resolveDuplicate(tx: TransactionEntity, keep: Boolean) = viewModelScope.launch {
+        repo.resolveDuplicate(tx.id, keep)
+        toast(if (keep) "Kept · counted in your totals" else "Duplicate removed")
+    }
 
     fun markReviewed(items: List<TransactionEntity>) = viewModelScope.launch {
         items.forEach { repo.saveTransaction(it.copy(needsReview = false)) }

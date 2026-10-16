@@ -76,6 +76,7 @@ private val filters = listOf(
     "income" to "Income",
     "personal" to "Personal",
     "corporate" to "Corporate",
+    "dups" to "Duplicates",
     "review" to "To review",
     "sms" to "From SMS",
 )
@@ -112,6 +113,7 @@ fun TransactionsScreen(
                     "personal" -> !it.isCorporate
                     "corporate" -> it.isCorporate
                     "review" -> it.tx.needsReview
+                    "dups" -> it.isPendingDuplicate
                     "sms" -> it.tx.source == TxSource.SMS
                     else -> true
                 }
@@ -174,8 +176,12 @@ fun TransactionsScreen(
                     .padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                filters.forEach { (key, label) ->
-                    val count = if (key == "review") state.pendingReview else 0
+                filters.filter { it.first != "dups" || state.pendingDuplicates > 0 || filter == "dups" }.forEach { (key, label) ->
+                    val count = when (key) {
+                        "review" -> state.pendingReview
+                        "dups" -> state.pendingDuplicates
+                        else -> 0
+                    }
                     FilterChip(
                         selected = filter == key,
                         onClick = { filter = key },
@@ -201,8 +207,16 @@ fun TransactionsScreen(
             if (shown.isEmpty()) {
                 EmptyState(
                     icon = Icons.Filled.SearchOff,
-                    title = if (filter == "review") "Nothing to review" else "No transactions",
-                    body = if (filter == "review") "Every SMS transaction has a category. Nice!" else "Try another filter or month, or add one with +.",
+                    title = when (filter) {
+                        "review" -> "Nothing to review"
+                        "dups" -> "No duplicates"
+                        else -> "No transactions"
+                    },
+                    body = when (filter) {
+                        "review" -> "Every SMS transaction has a category. Nice!"
+                        "dups" -> "No repeated SMS or double charges waiting for you."
+                        else -> "Try another filter or month, or add one with +."
+                    },
                 )
             } else {
                 LazyColumn(contentPadding = PaddingValues(bottom = 96.dp)) {

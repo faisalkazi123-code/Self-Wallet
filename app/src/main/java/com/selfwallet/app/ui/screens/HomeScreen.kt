@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -92,6 +93,7 @@ fun HomeScreen(
     onOpen: (Long) -> Unit,
     onSeeAll: () -> Unit,
     onReview: () -> Unit,
+    onDuplicates: () -> Unit,
     onFixRates: () -> Unit,
     onToggleHide: () -> Unit,
 ) {
@@ -159,6 +161,19 @@ fun HomeScreen(
                     income = money(income, base, hidden),
                     net = money(income - spent, base, hidden),
                 )
+            }
+            if (state.pendingDuplicates > 0) {
+                item {
+                    val n = state.pendingDuplicates
+                    Banner(
+                        icon = Icons.Filled.Warning,
+                        title = "$n possible duplicate payment${if (n == 1) "" else "s"}",
+                        body = "Check with your bank: were you charged twice, or was the SMS just repeated?",
+                        action = "Check",
+                        onClick = onDuplicates,
+                        danger = true,
+                    )
+                }
             }
             if (state.pendingReview > 0) {
                 item {
@@ -317,7 +332,7 @@ private fun SplitCard(icon: ImageVector, label: String, value: String, fraction:
 }
 
 @Composable
-fun Banner(icon: ImageVector, title: String, body: String, action: String, onClick: () -> Unit) {
+fun Banner(icon: ImageVector, title: String, body: String, action: String, onClick: () -> Unit, danger: Boolean = false) {
     AppCard(
         Modifier
             .padding(horizontal = 16.dp, vertical = 6.dp)
@@ -329,9 +344,15 @@ fun Banner(icon: ImageVector, title: String, body: String, action: String, onCli
                 Modifier
                     .size(40.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.tertiaryContainer),
+                    .background(if (danger) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.tertiaryContainer),
                 contentAlignment = Alignment.Center,
-            ) { Icon(icon, null, tint = MaterialTheme.colorScheme.onTertiaryContainer, modifier = Modifier.size(20.dp)) }
+            ) {
+                Icon(
+                    icon, null,
+                    tint = if (danger) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onTertiaryContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleSmall)

@@ -11,13 +11,19 @@ import kotlinx.coroutines.launch
 class NotificationActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val txId = intent.getLongExtra(Notifications.EXTRA_TX_ID, 0L)
-        val kind = intent.getStringExtra(Notifications.EXTRA_KIND) ?: return
         if (txId == 0L) return
+        val kind = intent.getStringExtra(Notifications.EXTRA_KIND)
+        val resolveDup = intent.action == Notifications.ACTION_RESOLVE_DUP
+        if (kind == null && !resolveDup) return
         val app = context.applicationContext as SelfWalletApp
         val pending = goAsync()
         app.container.scope.launch {
             try {
-                app.container.repository.setSpendKind(txId, kind)
+                if (resolveDup) {
+                    app.container.repository.resolveDuplicate(txId, keep = intent.getBooleanExtra(Notifications.EXTRA_KEEP, true))
+                } else if (kind != null) {
+                    app.container.repository.setSpendKind(txId, kind)
+                }
                 NotificationManagerCompat.from(context).cancel(txId.toInt())
             } finally {
                 pending.finish()

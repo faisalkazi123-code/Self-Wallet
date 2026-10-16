@@ -15,7 +15,7 @@ object SmsImporter {
         var added = 0
         val cursor = context.contentResolver.query(
             Telephony.Sms.Inbox.CONTENT_URI,
-            arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE),
+            arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.DATE_SENT),
             "${Telephony.Sms.DATE} >= ?",
             arrayOf(sinceMillis.toString()),
             "${Telephony.Sms.DATE} ASC",
@@ -24,11 +24,13 @@ object SmsImporter {
             val iAddr = c.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
             val iBody = c.getColumnIndexOrThrow(Telephony.Sms.BODY)
             val iDate = c.getColumnIndexOrThrow(Telephony.Sms.DATE)
+            // DATE_SENT is the bank's timestamp, the same one the live SMS receiver sees.
+            val iSent = c.getColumnIndex(Telephony.Sms.DATE_SENT)
             while (c.moveToNext()) {
                 scanned++
                 val sender = c.getString(iAddr) ?: continue
                 val body = c.getString(iBody) ?: continue
-                val date = c.getLong(iDate)
+                val date = (if (iSent >= 0) c.getLong(iSent) else 0L).takeIf { it > 0 } ?: c.getLong(iDate)
                 if (repo.ingestSms(sender, body, date, notifyChange = false) != null) added++
             }
         }

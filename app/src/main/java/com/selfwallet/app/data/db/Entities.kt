@@ -42,6 +42,12 @@ data class TransactionEntity(
     val smsBody: String? = null,
     val smsHash: String? = null,
     val needsReview: Boolean = false,
+    /** Id of the transaction this one may duplicate (see DuplicateCheck). */
+    val duplicateOf: Long? = null,
+    /** DuplicateCheck.SAME_SMS or DuplicateCheck.SIMILAR. */
+    val dupKind: String? = null,
+    /** DuplicateCheck.PENDING until the user decides, then KEEP. */
+    val dupStatus: String? = null,
 )
 
 @Serializable

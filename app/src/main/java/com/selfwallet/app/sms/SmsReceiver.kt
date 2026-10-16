@@ -26,8 +26,9 @@ class SmsReceiver : BroadcastReceiver() {
                     val body = parts.joinToString("") { it.messageBody.orEmpty() }
                     val time = parts.first().timestampMillis.takeIf { it > 0 } ?: System.currentTimeMillis()
                     val tx = app.container.repository.ingestSms(sender, body, time)
-                    if (tx != null && settings.smsNotify) {
-                        Notifications.showAdded(context, tx, settings.hideAmounts)
+                    if (tx != null && (settings.smsNotify || tx.dupStatus != null)) {
+                        val original = tx.duplicateOf?.let { app.container.repository.getTransaction(it) }
+                        Notifications.showAdded(context, tx, settings.hideAmounts, original)
                     }
                 }
             } finally {

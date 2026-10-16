@@ -219,7 +219,18 @@ fun TransactionRow(item: TxUi, hidden: Boolean, onClick: () -> Unit, modifier: M
         Spacer(Modifier.width(8.dp))
         Column(horizontalAlignment = Alignment.End) {
             AmountText(t.amount, t.currency, item.isExpense, hidden)
-            if (item.isCorporate) {
+            if (item.isPendingDuplicate) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "⚠ Duplicate?",
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.errorContainer)
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            } else if (item.isCorporate) {
                 Spacer(Modifier.height(2.dp))
                 KindPill(SpendKind.CORPORATE)
             }

@@ -36,9 +36,12 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -85,6 +88,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.selfwallet.app.data.DuplicateCheck
 import com.selfwallet.app.data.db.SpendKind
 import com.selfwallet.app.data.db.TransactionEntity
 import com.selfwallet.app.data.db.TxSource
@@ -217,6 +221,24 @@ fun EditTransactionScreen(
                 .padding(inner)
                 .verticalScroll(rememberScrollState()),
         ) {
+            // ---- possible duplicate ----
+            val dupTx = original
+            if (dupTx != null && dupTx.dupStatus == DuplicateCheck.PENDING) {
+                DuplicateCard(
+                    tx = dupTx,
+                    other = state.items.firstOrNull { it.tx.id == dupTx.duplicateOf }?.tx,
+                    hidden = state.settings.hideAmounts,
+                    onRemove = {
+                        vm.resolveDuplicate(dupTx, keep = false)
+                        onDone()
+                    },
+                    onKeep = {
+                        vm.resolveDuplicate(dupTx, keep = true)
+                        original = dupTx.copy(dupStatus = DuplicateCheck.KEEP)
+                    },
+                )
+            }
+
             SingleChoiceSegmentedButtonRow(
                 Modifier
                     .fillMaxWidth()
@@ -502,6 +524,72 @@ fun EditTransactionScreen(
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
+    }
+}
+
+@Composable
+private fun DuplicateCard(
+    tx: TransactionEntity,
+    other: TransactionEntity?,
+    hidden: Boolean,
+    onRemove: () -> Unit,
+    onKeep: () -> Unit,
+) {
+    val sameSms = tx.dupKind == DuplicateCheck.SAME_SMS
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.errorContainer,
+        modifier = Modifier
+            .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+            .fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Warning, null, tint = MaterialTheme.colorScheme.onErrorContainer)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (sameSms) "Same payment SMS received twice" else "Possible double charge",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            if (other != null) {
+                Text(
+                    "Already recorded: ${if (hidden) "••••" else Currencies.format(other.amount, other.currency)}" +
+                        (if (other.merchant.isNotBlank()) " at ${other.merchant}" else "") +
+                        " · ${Dates.full(other.timestamp)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+            Text(
+                if (sameSms) {
+                    "The bank sent the same message again. This one is not counted in your totals yet. " +
+                        "Open your bank app or statement: if the money left your account twice, keep it and contact your bank."
+                } else {
+                    "Same amount, same merchant, minutes apart. Check your bank app or statement. " +
+                        "If you were charged twice, contact your bank to dispute the extra payment."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onRemove,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                    modifier = Modifier.weight(1f),
+                ) { Text(if (sameSms) "Repeat SMS · remove" else "Remove this one", maxLines = 1) }
+                OutlinedButton(onClick = onKeep, modifier = Modifier.weight(1f)) {
+                    Text(if (sameSms) "Charged twice · keep" else "Both are real", maxLines = 1, color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+            }
+        }
     }
 }
 

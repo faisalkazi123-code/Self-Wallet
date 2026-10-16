@@ -137,6 +137,7 @@ private fun MainShell(vm: WalletViewModel, state: WalletState, openTxId: Long, o
                     onOpen = { nav.navigate(Routes.edit(it)) },
                     onSeeAll = { nav.goToTab("transactions") },
                     onReview = { nav.navigate(Routes.transactions("review")) { launchSingleTop = true } },
+                    onDuplicates = { nav.navigate(Routes.transactions("dups")) { launchSingleTop = true } },
                     onFixRates = { nav.navigate(Routes.manage("rates")) },
                     onToggleHide = { vm.setHideAmounts(!state.settings.hideAmounts) },
                 )

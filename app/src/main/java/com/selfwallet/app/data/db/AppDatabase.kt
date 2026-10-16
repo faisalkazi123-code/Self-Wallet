@@ -10,6 +10,8 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Upsert
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -25,6 +27,16 @@ interface TransactionDao {
 
     @Query("SELECT COUNT(*) FROM transactions WHERE smsHash = :hash")
     suspend fun countByHash(hash: String): Int
+
+    /** The original SMS and any stored repeats (their hash is "<hash>#<time>"). */
+    @Query("SELECT * FROM transactions WHERE smsHash = :hash OR smsHash LIKE :hash || '#%'")
+    suspend fun byHash(hash: String): List<TransactionEntity>
+
+    @Query(
+        "SELECT * FROM transactions WHERE type = :type AND currency = :currency " +
+            "AND ABS(amount - :amount) < 0.0001 AND timestamp BETWEEN :from AND :to",
+    )
+    suspend fun similar(type: String, currency: String, amount: Double, from: Long, to: Long): List<TransactionEntity>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(tx: TransactionEntity): Long
@@ -140,7 +152,7 @@ interface RateDao {
         RuleEntity::class,
         RateEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -152,6 +164,16 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         fun create(context: Context): AppDatabase =
-            Room.databaseBuilder(context, AppDatabase::class.java, "self_wallet.db").build()
+            Room.databaseBuilder(context, AppDatabase::class.java, "self_wallet.db")
+                .addMigrations(MIGRATION_1_2)
+                .build()
+
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN duplicateOf INTEGER")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN dupKind TEXT")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN dupStatus TEXT")
+            }
+        }
     }
 }

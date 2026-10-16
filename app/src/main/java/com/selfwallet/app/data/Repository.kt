@@ -62,12 +62,13 @@ class Repository(
 
     /**
      * Parses an SMS and stores it if it is a new transaction.
-     * Returns the stored transaction, or null when the SMS was not a transaction or a duplicate.
+     * Returns the stored transaction, or null when the SMS was not a transaction or was already stored.
+     * A possible duplicate is still stored, with [TransactionEntity.dupStatus] = PENDING.
      */
     suspend fun ingestSms(sender: String, body: String, timestamp: Long, notifyChange: Boolean = true): TransactionEntity? {
         val parsed = SmsParser.parse(sender, body) ?: return null
         val hash = hash("$sender|${body.trim()}")
-        if (db.transactions().countByHash(hash) > 0) return null
+        val sameText = db.transactions().byHash(hash)
 
         ensureSeeded()
         val s = settings.current()
@@ -83,21 +84,35 @@ class Repository(
             null
         }
 
+        val merchant = rule?.renameTo?.takeIf { it.isNotBlank() } ?: parsed.merchant.orEmpty()
+        val nearby = db.transactions().similar(
+            type, parsed.currency, parsed.amount,
+            timestamp - DuplicateCheck.SIMILAR_WINDOW_MS, timestamp + DuplicateCheck.SIMILAR_WINDOW_MS,
+        )
+        val verdict = DuplicateCheck.classify(timestamp, merchant, parsed.account, sameText, nearby)
+        if (verdict is DuplicateCheck.Verdict.AlreadyStored) return null
+        val dup = verdict as? DuplicateCheck.Verdict.Duplicate
+
         val tx = TransactionEntity(
             amount = parsed.amount,
             currency = parsed.currency,
             type = type,
             categoryId = rule?.categoryId ?: fallbackCategory,
             allocationId = rule?.allocationId ?: s.defaultAllocationId.takeIf { it != 0L },
-            merchant = rule?.renameTo?.takeIf { it.isNotBlank() } ?: parsed.merchant.orEmpty(),
+            merchant = merchant,
             timestamp = timestamp,
             source = TxSource.SMS,
             account = parsed.account,
             smsSender = sender,
             smsBody = body,
-            smsHash = hash,
+            // Repeats of the same text need their own key because smsHash is unique.
+            smsHash = if (dup?.kind == DuplicateCheck.SAME_SMS) "$hash#$timestamp" else hash,
             needsReview = rule?.categoryId == null && type == TxType.EXPENSE,
-        )
+            duplicateOf = dup?.of?.id,
+            dupKind = dup?.kind,
+            dupStatus = if (dup != null) DuplicateCheck.PENDING else null,
+            // A repeat inherits the original's category and destination.
+        ).let { if (dup != null) it.copy(categoryId = it.categoryId ?: dup.of.categoryId, allocationId = dup.of.allocationId ?: it.allocationId) else it }
         val id = db.transactions().insert(tx)
         if (id <= 0) return null
         if (notifyChange) onDataChanged()
@@ -105,6 +120,13 @@ class Repository(
     }
 
     fun notifyChanged() = onDataChanged()
+
+    /** User decided about a flagged duplicate: keep it (counted) or delete it. */
+    suspend fun resolveDuplicate(txId: Long, keep: Boolean) {
+        val tx = db.transactions().get(txId) ?: return
+        if (keep) db.transactions().upsert(tx.copy(dupStatus = DuplicateCheck.KEEP)) else db.transactions().delete(tx)
+        onDataChanged()
+    }
 
     /**
      * Returns the destination a transaction should use for [kind]: the SMS default when it
