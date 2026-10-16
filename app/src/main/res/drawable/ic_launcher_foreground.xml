@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A wallet with a speech-bubble tab: "money from messages". Safe zone is the centre 66dp. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- wallet body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,40h40a6,6 0,0 1,6 6v22a6,6 0,0 1,-6 6h-40a6,6 0,0 1,-6 -6v-22a6,6 0,0 1,6 -6z" />
+    <!-- wallet flap -->
+    <path
+        android:fillColor="#CCFBF1"
+        android:pathData="M38,33h26a4,4 0,0 1,4 4v3h-34v-3a4,4 0,0 1,4 -4z" />
+    <!-- clasp -->
+    <path
+        android:fillColor="#0F766E"
+        android:pathData="M64,51h16v12h-16a6,6 0,0 1,0 -12z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M66,57m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+    <!-- message lines -->
+    <path
+        android:fillColor="#0F766E"
+        android:pathData="M36,50h18a2,2 0,0 1,0 4h-18a2,2 0,0 1,0 -4z" />
+    <path
+        android:fillColor="#5EEAD4"
+        android:pathData="M36,58h12a2,2 0,0 1,0 4h-12a2,2 0,0 1,0 -4z" />
+</vector>

@@ -1,0 +1,206 @@
+package com.selfwallet.app.data
+
+import androidx.room.withTransaction
+import com.selfwallet.app.data.db.AllocationEntity
+import com.selfwallet.app.data.db.AppDatabase
+import com.selfwallet.app.data.db.CategoryEntity
+import com.selfwallet.app.data.db.RateEntity
+import com.selfwallet.app.data.db.RuleEntity
+import com.selfwallet.app.data.db.SpendKind
+import com.selfwallet.app.data.db.TransactionEntity
+import com.selfwallet.app.data.db.TxSource
+import com.selfwallet.app.data.db.TxType
+import com.selfwallet.app.data.prefs.SettingsStore
+import com.selfwallet.app.sms.SmsParser
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.security.MessageDigest
+
+class Repository(
+    private val db: AppDatabase,
+    val settings: SettingsStore,
+    private val onDataChanged: () -> Unit,
+) {
+    val transactions: Flow<List<TransactionEntity>> = db.transactions().observeAll()
+    val categories: Flow<List<CategoryEntity>> = db.categories().observeAll()
+    val allocations: Flow<List<AllocationEntity>> = db.allocations().observeAll()
+    val rules: Flow<List<RuleEntity>> = db.rules().observeAll()
+    val rates: Flow<List<RateEntity>> = db.rates().observeAll()
+
+    private val seedLock = Mutex()
+
+    suspend fun ensureSeeded() {
+        seedLock.withLock {
+            if (db.categories().getAll().isEmpty()) {
+                db.categories().insertAll(DefaultData.categories())
+            }
+            if (db.allocations().getAll().isEmpty()) {
+                db.allocations().insertAll(DefaultData.allocations())
+                val personal = db.allocations().getAll().firstOrNull { it.kind == SpendKind.PERSONAL }
+                if (personal != null) settings.setDefaultAllocation(personal.id)
+            }
+        }
+    }
+
+    // ---- transactions -------------------------------------------------------------------
+
+    suspend fun getTransaction(id: Long): TransactionEntity? = db.transactions().get(id)
+
+    suspend fun saveTransaction(tx: TransactionEntity): Long {
+        val id = db.transactions().upsert(tx)
+        onDataChanged()
+        return if (tx.id != 0L) tx.id else id
+    }
+
+    suspend fun deleteTransaction(tx: TransactionEntity) {
+        db.transactions().delete(tx)
+        onDataChanged()
+    }
+
+    // ---- SMS ingestion ------------------------------------------------------------------
+
+    /**
+     * Parses an SMS and stores it if it is a new transaction.
+     * Returns the stored transaction, or null when the SMS was not a transaction or a duplicate.
+     */
+    suspend fun ingestSms(sender: String, body: String, timestamp: Long, notifyChange: Boolean = true): TransactionEntity? {
+        val parsed = SmsParser.parse(sender, body) ?: return null
+        val hash = hash("$sender|${body.trim()}")
+        if (db.transactions().countByHash(hash) > 0) return null
+
+        ensureSeeded()
+        val s = settings.current()
+        val rules = db.rules().getAll()
+        val categories = db.categories().getAll()
+        val haystack = "$sender ${parsed.merchant.orEmpty()} $body".lowercase()
+        val rule = rules.firstOrNull { it.keyword.isNotBlank() && haystack.contains(it.keyword.lowercase().trim()) }
+
+        val type = if (parsed.kind == SmsParser.Kind.INCOME) TxType.INCOME else TxType.EXPENSE
+        val fallbackCategory = if (type == TxType.INCOME) {
+            categories.firstOrNull { it.type == TxType.INCOME }?.id
+        } else {
+            null
+        }
+
+        val tx = TransactionEntity(
+            amount = parsed.amount,
+            currency = parsed.currency,
+            type = type,
+            categoryId = rule?.categoryId ?: fallbackCategory,
+            allocationId = rule?.allocationId ?: s.defaultAllocationId.takeIf { it != 0L },
+            merchant = rule?.renameTo?.takeIf { it.isNotBlank() } ?: parsed.merchant.orEmpty(),
+            timestamp = timestamp,
+            source = TxSource.SMS,
+            account = parsed.account,
+            smsSender = sender,
+            smsBody = body,
+            smsHash = hash,
+            needsReview = rule?.categoryId == null && type == TxType.EXPENSE,
+        )
+        val id = db.transactions().insert(tx)
+        if (id <= 0) return null
+        if (notifyChange) onDataChanged()
+        return tx.copy(id = id)
+    }
+
+    fun notifyChanged() = onDataChanged()
+
+    // ---- categories / allocations / rules / rates ----------------------------------------
+
+    suspend fun saveCategory(c: CategoryEntity) { db.categories().upsert(c); onDataChanged() }
+    suspend fun deleteCategory(c: CategoryEntity) {
+        db.withTransaction {
+            db.transactions().clearCategory(c.id)
+            db.categories().delete(c)
+        }
+        onDataChanged()
+    }
+
+    suspend fun saveAllocation(a: AllocationEntity) { db.allocations().upsert(a); onDataChanged() }
+    suspend fun deleteAllocation(a: AllocationEntity) {
+        db.withTransaction {
+            db.transactions().clearAllocation(a.id)
+            db.allocations().delete(a)
+        }
+        onDataChanged()
+    }
+
+    suspend fun saveRule(r: RuleEntity) { db.rules().upsert(r); onDataChanged() }
+    suspend fun deleteRule(r: RuleEntity) { db.rules().delete(r); onDataChanged() }
+
+    suspend fun saveRate(r: RateEntity) { db.rates().upsert(r); onDataChanged() }
+    suspend fun deleteRate(r: RateEntity) { db.rates().delete(r); onDataChanged() }
+
+    /** Creates or updates a rule for [keyword] after the user categorised an SMS transaction. */
+    suspend fun learnRule(keyword: String, categoryId: Long?, allocationId: Long?) {
+        val k = keyword.trim()
+        if (k.length < 3) return
+        val existing = db.rules().getAll().firstOrNull { it.keyword.equals(k, ignoreCase = true) }
+        db.rules().upsert(
+            (existing ?: RuleEntity(keyword = k)).copy(categoryId = categoryId, allocationId = allocationId),
+        )
+    }
+
+    /** Applies all rules to SMS transactions still waiting for review. Returns how many changed. */
+    suspend fun applyRulesToPending(): Int {
+        val rules = db.rules().getAll()
+        if (rules.isEmpty()) return 0
+        var changed = 0
+        db.transactions().getAll().filter { it.needsReview }.forEach { tx ->
+            val hay = "${tx.smsSender.orEmpty()} ${tx.merchant} ${tx.smsBody.orEmpty()}".lowercase()
+            val rule = rules.firstOrNull { it.keyword.isNotBlank() && hay.contains(it.keyword.lowercase().trim()) }
+            if (rule != null) {
+                db.transactions().upsert(
+                    tx.copy(
+                        categoryId = rule.categoryId ?: tx.categoryId,
+                        allocationId = rule.allocationId ?: tx.allocationId,
+                        merchant = rule.renameTo?.takeIf { it.isNotBlank() } ?: tx.merchant,
+                        needsReview = (rule.categoryId ?: tx.categoryId) == null,
+                    ),
+                )
+                changed++
+            }
+        }
+        if (changed > 0) onDataChanged()
+        return changed
+    }
+
+    // ---- backup -------------------------------------------------------------------------
+
+    suspend fun snapshot(): Snapshot = Snapshot(
+        categories = db.categories().getAll(),
+        allocations = db.allocations().getAll(),
+        rules = db.rules().getAll(),
+        rates = db.rates().getAll(),
+        transactions = db.transactions().getAll(),
+    )
+
+    suspend fun replaceAll(s: Snapshot) {
+        db.withTransaction {
+            db.transactions().deleteAll()
+            db.rules().deleteAll()
+            db.rates().deleteAll()
+            db.categories().deleteAll()
+            db.allocations().deleteAll()
+            db.categories().insertAll(s.categories)
+            db.allocations().insertAll(s.allocations)
+            db.rules().insertAll(s.rules)
+            db.rates().insertAll(s.rates)
+            db.transactions().insertAll(s.transactions)
+        }
+    }
+
+    data class Snapshot(
+        val categories: List<CategoryEntity>,
+        val allocations: List<AllocationEntity>,
+        val rules: List<RuleEntity>,
+        val rates: List<RateEntity>,
+        val transactions: List<TransactionEntity>,
+    )
+
+    private fun hash(s: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
+        return digest.joinToString("") { "%02x".format(it) }.take(32)
+    }
+}
