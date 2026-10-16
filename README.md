@@ -12,16 +12,47 @@ Self Wallet reads the debit/credit messages your bank and card issuers already s
 
 ## Features
 
+### Core
 | | |
 |---|---|
-| 📩 **SMS auto-capture** | New bank/card SMS are parsed the moment they arrive and added as transactions. OTPs, promotions, reminders and failed payments are ignored. You can also import past SMS from your inbox (30 days to everything); duplicates are skipped. |
-| 🏢 **Personal & corporate** | Create your own "Expense for" destinations (e.g. *Personal*, *Family*, *ACME Corp*, *Client X trip*), each marked Personal or Corporate. Home, reports and CSV exports split spending between them, so expense claims are easy. |
-| 💱 **Multiple currencies** | 40+ currencies are detected from SMS (₹, Rs, AED, SAR, $, €, £, KWD, …). Each transaction keeps its original currency, and totals are converted to your base currency using exchange rates you set (they're stored offline). |
-| 🧠 **Learns as you go** | Categorise an SMS transaction once and tick *Remember*: future messages from that merchant get the same category and destination. You can also manage rules by hand. |
-| 📊 **Reports** | Monthly and yearly charts, breakdowns by category, by destination and by currency, and a **CSV export** for any filter (e.g. "ACME Corp, October"). |
-| 🔒 **Private by design** | The app has **no INTERNET permission**. No account, no ads, no analytics. You can also hide amounts on screen and in notifications. |
-| ☁️ **Your storage, your choice** | Data lives in a private database on the phone. Optionally keep an auto-updated backup file **on the phone, in Google Drive or in OneDrive**. The file is written through Android's file picker and uploaded by the Drive/OneDrive app, never by Self Wallet. |
-| 🎨 **Modern UI** | Material 3 design, light/dark theme, optional Material You colours, swipe to delete with undo, search and filters. |
+| 📩 **SMS auto-capture** | Bank/card SMS become transactions instantly: amount, currency, merchant, card. OTPs, promotions, reminders and failed payments are ignored. Import past SMS from your inbox too. |
+| 🏢 **Personal & corporate** | Big Personal / Corporate toggle, your own destinations (Family, ACME Corp, Client X…), swipe right in Activity to flip, or tap *Personal / Corporate* right on the SMS notification. |
+| 💱 **Multiple currencies** | 40+ currencies detected; totals converted to your base currency with offline exchange rates you control. |
+| ⚠️ **Duplicate detection** | Same SMS twice, or same amount at the same merchant/card within 15 minutes: you get an alert to check with your bank before anything is double-counted. |
+| 🧠 **Learns as you go** | “Remember for this merchant” turns your choices into auto-categorise rules. |
+
+### Corporate & money control
+| | |
+|---|---|
+| 🎯 **Monthly budgets** | Overall, personal/corporate or per category, with alerts at 80% and 100%. |
+| 🧾 **Receipt photos** | Snap or pick a receipt for any expense; stored privately on the phone. |
+| 💼 **Claim tracker** | Not claimed → Submitted → Paid back for corporate expenses; “to claim” total on Home and bulk actions. |
+| 📄 **PDF expense report** | One tap: summary, itemised table and receipt pages, with your name, for any period, company or trip. CSV export too. |
+| 🔒 **App lock** | Fingerprint / face / screen lock; the app preview is hidden in recent apps. |
+
+### Smarter SMS
+| | |
+|---|---|
+| 🏦 **Balances & limits** | “Avl Bal” / “Avl Limit” from SMS shown per account and card on Home. |
+| 📅 **Bills & subscriptions** | Card bill reminder SMS are saved; Netflix, rent and other repeating payments are detected. Reminders 2 days before and on the day. |
+| 🚨 **Unusual spending** | Alert when a payment is far larger than you normally spend. |
+| 👥 **Split expenses** | Split with friends, see who owes you, send a reminder message, mark as settled. |
+
+### Insights & quick entry
+| | |
+|---|---|
+| 📊 **Trends** | Month-over-month change, 6-month chart, spending calendar, category & destination breakdowns. |
+| 🗓️ **Monthly summary** | A notification on the 1st with last month's total, top category and amount still to claim. |
+| 🧩 **Home-screen widget** | Today's and this month's spending with a quick “+” button. |
+| ⚡ **Fast entry** | Long-press the app icon → *Add expense*, voice entry (“Lunch 45 dirhams corporate”) and one-tap templates. |
+
+### Practical extras
+| | |
+|---|---|
+| ✈️ **Travel mode** | Create a trip; expenses in those dates are tagged automatically and can go to a client. Reports per trip. |
+| 👀 **Shared ledger** | Open a colleague's backup file (e.g. from a shared OneDrive folder) read-only. |
+| 🎨 **Two styles** | *Calm Teal* or *Paper Ledger*, each in light and dark. |
+| ☁️ **Your storage** | Private database on the phone, with optional auto-backup to a file on the phone, Google Drive or OneDrive. **No INTERNET permission, no account, no ads.** |
 
 ## Install
 
