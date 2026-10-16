@@ -39,6 +39,10 @@ android {
                 keyAlias = "selfwallet"
                 keyPassword = "selfwallet"
             }
+            // Sign with every scheme so older or third-party package installers accept the APK too.
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
         }
     }
 
