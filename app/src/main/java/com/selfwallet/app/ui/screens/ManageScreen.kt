@@ -417,7 +417,7 @@ private fun AllocationDialog(
                         selected = makeDefault,
                         onClick = { if (!isDefault) makeDefault = !makeDefault },
                         label = { Text(if (isDefault) "Default for SMS" else "Use as default for SMS") },
-                        leadingIcon = if (makeDefault) ({ Icon(Icons.Filled.Check, null, Modifier.size(18.dp)) }) else null,
+                        leadingIcon = { if (makeDefault) Icon(Icons.Filled.Check, null, Modifier.size(18.dp)) },
                     )
                 }
             }

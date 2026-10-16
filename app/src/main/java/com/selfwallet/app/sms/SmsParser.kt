@@ -104,7 +104,7 @@ object SmsParser {
     )
 
     private val accountPattern = Regex(
-        "(?:a/c|a/c no\\.?|acct|account|card|ac)\\s*(?:no\\.?|number)?\\s*(?:ending(?: with| in)?)?\\s*[:#]?\\s*[x*.]*\\s*([0-9]{3,6})\\b",
+        "\\b(?:a/c|a/c no\\.?|acct|account|card|ac)\\s*(?:no\\.?|number)?\\s*(?:ending(?: with| in)?)?\\s*[:#]?\\s*[x*.]*\\s*([0-9]{3,6})\\b",
         RegexOption.IGNORE_CASE,
     )
 
