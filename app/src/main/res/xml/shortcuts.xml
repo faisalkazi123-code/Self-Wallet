@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_add"
+        android:shortcutId="add_expense"
+        android:shortcutShortLabel="@string/shortcut_add">
+        <intent
+            android:action="com.selfwallet.app.ADD"
+            android:targetClass="com.selfwallet.app.MainActivity"
+            android:targetPackage="com.selfwallet.app" />
+    </shortcut>
+</shortcuts>

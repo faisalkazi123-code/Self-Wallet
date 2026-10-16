@@ -1,7 +1,12 @@
 package com.selfwallet.app.data
 
 import androidx.room.withTransaction
+import com.selfwallet.app.data.db.AccountEntity
 import com.selfwallet.app.data.db.AllocationEntity
+import com.selfwallet.app.data.db.BillEntity
+import com.selfwallet.app.data.db.SplitEntity
+import com.selfwallet.app.data.db.TemplateEntity
+import com.selfwallet.app.data.db.TripEntity
 import com.selfwallet.app.data.db.AppDatabase
 import com.selfwallet.app.data.db.BudgetEntity
 import com.selfwallet.app.data.db.CategoryEntity
@@ -27,6 +32,8 @@ class Repository(
     private val onDataChanged: () -> Unit,
     /** Shows a notification when a budget reaches 80% or 100% this month. */
     private val onBudgetAlert: (title: String, body: String) -> Unit = { _, _ -> },
+    /** Unusual-spending alerts. */
+    private val onSmartAlert: (title: String, body: String) -> Unit = { _, _ -> },
 ) {
     val transactions: Flow<List<TransactionEntity>> = db.transactions().observeAll()
     val categories: Flow<List<CategoryEntity>> = db.categories().observeAll()
@@ -34,6 +41,11 @@ class Repository(
     val rules: Flow<List<RuleEntity>> = db.rules().observeAll()
     val rates: Flow<List<RateEntity>> = db.rates().observeAll()
     val budgets: Flow<List<BudgetEntity>> = db.budgets().observeAll()
+    val accounts: Flow<List<AccountEntity>> = db.accounts().observeAll()
+    val bills: Flow<List<BillEntity>> = db.bills().observeAll()
+    val splits: Flow<List<SplitEntity>> = db.splits().observeAll()
+    val trips: Flow<List<TripEntity>> = db.trips().observeAll()
+    val templates: Flow<List<TemplateEntity>> = db.templates().observeAll()
 
     private val seedLock = Mutex()
 
@@ -55,7 +67,10 @@ class Repository(
     suspend fun getTransaction(id: Long): TransactionEntity? = db.transactions().get(id)
 
     suspend fun saveTransaction(tx: TransactionEntity): Long {
-        val id = db.transactions().upsert(tx)
+        val id = db.transactions().upsert(
+            // New entries during a trip are tagged automatically.
+            if (tx.id == 0L && tx.tripId == null) tx.copy(tripId = tripOn(tx.timestamp)?.id) else tx,
+        )
         onDataChanged()
         if (tx.type == TxType.EXPENSE) checkBudgets()
         return if (tx.id != 0L) tx.id else id
@@ -101,12 +116,14 @@ class Repository(
         if (verdict is DuplicateCheck.Verdict.AlreadyStored) return null
         val dup = verdict as? DuplicateCheck.Verdict.Duplicate
 
+        val trip = tripOn(timestamp)
         val tx = TransactionEntity(
             amount = parsed.amount,
             currency = parsed.currency,
             type = type,
             categoryId = rule?.categoryId ?: fallbackCategory,
-            allocationId = rule?.allocationId ?: s.defaultAllocationId.takeIf { it != 0L },
+            allocationId = rule?.allocationId ?: trip?.allocationId ?: s.defaultAllocationId.takeIf { it != 0L },
+            tripId = trip?.id,
             merchant = merchant,
             timestamp = timestamp,
             source = TxSource.SMS,
@@ -123,12 +140,122 @@ class Repository(
         ).let { if (dup != null) it.copy(categoryId = it.categoryId ?: dup.of.categoryId, allocationId = dup.of.allocationId ?: it.allocationId) else it }
         val id = db.transactions().insert(tx)
         if (id <= 0) return null
+        if (parsed.balance != null) recordBalance(sender, parsed.account, parsed.balance, parsed.balanceCurrency ?: parsed.currency, parsed.balanceIsLimit, timestamp)
         if (notifyChange) {
             onDataChanged()
-            if (type == TxType.EXPENSE) checkBudgets()
+            if (type == TxType.EXPENSE) {
+                checkBudgets()
+                if (dup == null) checkUnusual(tx.copy(id = id))
+            }
         }
         return tx.copy(id = id)
     }
+
+    /** Stores a "bill due" reminder SMS. Returns the new bill, or null if not a bill or already known. */
+    suspend fun ingestBill(sender: String, body: String, timestamp: Long): BillEntity? {
+        val received = Dates.toDate(timestamp)
+        val due = SmsParser.parseDue(sender, body, received) ?: return null
+        val title = (SmsParser.senderName(sender) ?: sender) + (due.account?.let { " ••$it" } ?: "")
+        val bill = BillEntity(
+            title = title,
+            amount = due.amount,
+            currency = due.currency,
+            dueDay = due.dueDate.toEpochDay(),
+            account = due.account,
+            // One bill per card per due date, however many reminders the bank sends.
+            hash = hash("${SmsParser.senderName(sender) ?: sender}|${due.account}|${due.dueDate}"),
+        )
+        val id = db.bills().insert(bill)
+        if (id <= 0) return null
+        onDataChanged()
+        return bill.copy(id = id)
+    }
+
+    private suspend fun recordBalance(sender: String, account: String?, amount: Double, currency: String, isLimit: Boolean, at: Long) {
+        val name = SmsParser.senderName(sender) ?: sender
+        val key = "$name|${account.orEmpty()}|${if (isLimit) "L" else "B"}"
+        val existing = db.accounts().byKey(key)
+        if (existing != null && existing.updatedAt > at) return
+        db.accounts().upsert(
+            (existing ?: AccountEntity(accountKey = key, label = name, last4 = account, balance = amount, currency = currency, updatedAt = at))
+                .copy(balance = amount, currency = currency, isCreditLimit = isLimit, updatedAt = at),
+        )
+    }
+
+    private suspend fun checkUnusual(tx: TransactionEntity) {
+        val s = settings.current()
+        if (!s.smartAlerts) return
+        val rates = db.rates().getAll().associate { it.currency to it.rate }
+        fun base(t: TransactionEntity) = t.amount * (if (t.currency == s.baseCurrency) 1.0 else rates[t.currency] ?: 1.0)
+        val since = tx.timestamp - 90L * 24 * 60 * 60 * 1000
+        val history = db.transactions().getAll().filter {
+            it.id != tx.id && it.type == TxType.EXPENSE && it.timestamp in since until tx.timestamp && !DuplicateCheck.isUncounted(it)
+        }
+        val categoryHistory = history.filter { tx.categoryId != null && it.categoryId == tx.categoryId }.map { base(it) }
+        if (Insights.isUnusual(base(tx), categoryHistory, history.map { base(it) })) {
+            onSmartAlert(
+                "Unusually large payment",
+                "${Currencies.format(tx.amount, tx.currency)}" + (if (tx.merchant.isNotBlank()) " at ${tx.merchant}" else "") +
+                    " is much more than you usually spend. If you don't recognise it, contact your bank.",
+            )
+        }
+    }
+
+    // ---- trips ---------------------------------------------------------------------------
+
+    suspend fun tripOn(timestamp: Long): TripEntity? {
+        val day = Dates.toDate(timestamp).toEpochDay()
+        return db.trips().getAll().firstOrNull { day in it.startDay..it.endDay }
+    }
+
+    suspend fun saveTrip(t: TripEntity) {
+        val id = db.trips().upsert(t).let { if (t.id != 0L) t.id else it }
+        // Tag existing expenses in the date range that have no trip yet.
+        db.withTransaction {
+            db.transactions().getAll()
+                .filter { it.tripId == null && Dates.toDate(it.timestamp).toEpochDay() in t.startDay..t.endDay }
+                .forEach { db.transactions().upsert(it.copy(tripId = id)) }
+        }
+        onDataChanged()
+    }
+
+    suspend fun deleteTrip(t: TripEntity) {
+        db.withTransaction {
+            db.trips().clearFromTransactions(t.id)
+            db.trips().delete(t)
+        }
+        onDataChanged()
+    }
+
+    // ---- bills, accounts, splits, templates ---------------------------------------------
+
+    suspend fun saveBill(b: BillEntity) { db.bills().upsert(b); onDataChanged() }
+    suspend fun deleteBill(b: BillEntity) { db.bills().delete(b); onDataChanged() }
+    suspend fun getBills(): List<BillEntity> = db.bills().getAll()
+    suspend fun deleteAccount(a: AccountEntity) { db.accounts().delete(a); onDataChanged() }
+
+    suspend fun splitsFor(txId: Long): List<SplitEntity> = db.splits().forTx(txId)
+
+    suspend fun saveSplits(txId: Long, splits: List<SplitEntity>) {
+        db.withTransaction {
+            db.splits().deleteForTx(txId)
+            db.splits().insertAll(splits.filter { it.person.isNotBlank() }.map { it.copy(id = 0, txId = txId) })
+        }
+        onDataChanged()
+    }
+
+    suspend fun setSplitSettled(split: SplitEntity, settled: Boolean) {
+        db.splits().upsert(split.copy(settled = settled))
+        onDataChanged()
+    }
+
+    suspend fun saveTemplate(t: TemplateEntity) { db.templates().upsert(t); onDataChanged() }
+    suspend fun deleteTemplate(t: TemplateEntity) { db.templates().delete(t); onDataChanged() }
+
+    suspend fun allTransactions(): List<TransactionEntity> = db.transactions().getAll()
+    suspend fun allCategories(): List<CategoryEntity> = db.categories().getAll()
+    suspend fun allAllocations(): List<AllocationEntity> = db.allocations().getAll()
+    suspend fun allRates(): List<RateEntity> = db.rates().getAll()
 
     fun notifyChanged() = onDataChanged()
 
@@ -288,6 +415,11 @@ class Repository(
         rates = db.rates().getAll(),
         transactions = db.transactions().getAll(),
         budgets = db.budgets().getAll(),
+        accounts = db.accounts().getAll(),
+        bills = db.bills().getAll(),
+        splits = db.splits().getAll(),
+        trips = db.trips().getAll(),
+        templates = db.templates().getAll(),
     )
 
     suspend fun replaceAll(s: Snapshot) {
@@ -298,12 +430,22 @@ class Repository(
             db.categories().deleteAll()
             db.allocations().deleteAll()
             db.budgets().deleteAll()
+            db.accounts().deleteAll()
+            db.bills().deleteAll()
+            db.splits().deleteAll()
+            db.trips().deleteAll()
+            db.templates().deleteAll()
             db.categories().insertAll(s.categories)
             db.allocations().insertAll(s.allocations)
             db.rules().insertAll(s.rules)
             db.rates().insertAll(s.rates)
             db.transactions().insertAll(s.transactions)
             db.budgets().insertAll(s.budgets)
+            db.accounts().insertAll(s.accounts)
+            db.bills().insertAll(s.bills)
+            db.splits().insertAll(s.splits)
+            db.trips().insertAll(s.trips)
+            db.templates().insertAll(s.templates)
         }
     }
 
@@ -314,6 +456,11 @@ class Repository(
         val rates: List<RateEntity>,
         val transactions: List<TransactionEntity>,
         val budgets: List<BudgetEntity> = emptyList(),
+        val accounts: List<AccountEntity> = emptyList(),
+        val bills: List<BillEntity> = emptyList(),
+        val splits: List<SplitEntity> = emptyList(),
+        val trips: List<TripEntity> = emptyList(),
+        val templates: List<TemplateEntity> = emptyList(),
     )
 
     private fun hash(s: String): String {

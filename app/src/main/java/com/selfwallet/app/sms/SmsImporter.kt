@@ -31,7 +31,11 @@ object SmsImporter {
                 val sender = c.getString(iAddr) ?: continue
                 val body = c.getString(iBody) ?: continue
                 val date = (if (iSent >= 0) c.getLong(iSent) else 0L).takeIf { it > 0 } ?: c.getLong(iDate)
-                if (repo.ingestSms(sender, body, date, notifyChange = false) != null) added++
+                if (repo.ingestSms(sender, body, date, notifyChange = false) != null) {
+                    added++
+                } else {
+                    repo.ingestBill(sender, body, date)
+                }
             }
         }
         if (added > 0) repo.notifyChanged()

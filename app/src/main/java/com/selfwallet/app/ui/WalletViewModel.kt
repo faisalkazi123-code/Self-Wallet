@@ -8,6 +8,14 @@ import com.selfwallet.app.SelfWalletApp
 import com.selfwallet.app.backup.BackupFile
 import com.selfwallet.app.backup.PdfReport
 import com.selfwallet.app.data.Budgets
+import com.selfwallet.app.data.Insights
+import com.selfwallet.app.data.db.AccountEntity
+import com.selfwallet.app.data.db.BillEntity
+import com.selfwallet.app.data.db.SplitEntity
+import com.selfwallet.app.data.db.TemplateEntity
+import com.selfwallet.app.data.db.TripEntity
+import java.time.LocalDate
+import kotlinx.coroutines.flow.MutableStateFlow
 import com.selfwallet.app.data.DuplicateCheck
 import com.selfwallet.app.data.db.BudgetEntity
 import com.selfwallet.app.data.db.Claim
@@ -68,7 +76,25 @@ data class WalletState(
     val budgets: List<BudgetUi> = emptyList(),
     /** Currencies used by transactions that have no exchange rate to the base currency yet. */
     val missingRates: List<String> = emptyList(),
+    val accounts: List<AccountEntity> = emptyList(),
+    val bills: List<BillEntity> = emptyList(),
+    val splits: List<SplitUi> = emptyList(),
+    val trips: List<TripEntity> = emptyList(),
+    val templates: List<TemplateEntity> = emptyList(),
+    val recurring: List<Insights.Recurring> = emptyList(),
 ) {
+    /** Unpaid bills and recurring payments due in the next [days] days (and overdue bills). */
+    fun upcoming(days: Long = 30): List<Upcoming> {
+        val today = LocalDate.now()
+        val limit = today.plusDays(days)
+        val fromBills = bills.filter { !it.paid && LocalDate.ofEpochDay(it.dueDay) <= limit }
+            .map { Upcoming(it.title, it.amount, it.currency, LocalDate.ofEpochDay(it.dueDay), "Bill", it) }
+        val fromRecurring = recurring.filter { !it.next.isBefore(today) && it.next <= limit }
+            .map { Upcoming(it.merchant, it.amount, it.currency, it.next, it.label, null) }
+        return (fromBills + fromRecurring).sortedBy { it.date }
+    }
+    val owedToMe get() = splits.filter { !it.split.settled }
+    val activeTrip get() = LocalDate.now().toEpochDay().let { d -> trips.firstOrNull { d in it.startDay..it.endDay } }
     val base get() = settings.baseCurrency
     val pendingReview get() = items.count { it.tx.needsReview }
     val pendingDuplicates get() = items.count { it.isPendingDuplicate }
@@ -78,6 +104,21 @@ data class WalletState(
     fun rateOf(code: String): Double =
         if (code == base) 1.0 else rates.firstOrNull { it.currency == code }?.rate ?: 1.0
 }
+
+/** One person's share of an expense, with the expense it belongs to. */
+data class SplitUi(val split: SplitEntity, val tx: TxUi?) {
+    val currency get() = tx?.tx?.currency ?: ""
+}
+
+/** A bill or predicted recurring payment that is coming up. */
+data class Upcoming(
+    val title: String,
+    val amount: Double,
+    val currency: String,
+    val date: LocalDate,
+    val kind: String,
+    val bill: BillEntity?,
+)
 
 sealed interface UiEvent {
     data class Message(val text: String) : UiEvent
@@ -95,8 +136,24 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
         Lists(c, a, r, x, b)
     }
 
+    private val extras = combine(repo.accounts, repo.bills, repo.splits, repo.trips, repo.templates) { a, b, sp, t, tm ->
+        Extras(a, b, sp, t, tm)
+    }
+
+    private data class Extras(
+        val accounts: List<AccountEntity>,
+        val bills: List<BillEntity>,
+        val splits: List<SplitEntity>,
+        val trips: List<TripEntity>,
+        val templates: List<TemplateEntity>,
+    )
+
+    /** A colleague's backup opened read-only (Settings › View a shared ledger). */
+    private val _shared = MutableStateFlow<BackupFile?>(null)
+    val shared: StateFlow<BackupFile?> = _shared
+
     val state: StateFlow<WalletState> =
-        combine(repo.settings.settings, repo.transactions, lists) { s, txs, l ->
+        combine(repo.settings.settings, repo.transactions, lists, extras) { s, txs, l, x ->
             val cats = l.categories.associateBy { it.id }
             val allocs = l.allocations.associateBy { it.id }
             val rates = l.rates.associateBy { it.currency }
@@ -121,6 +178,15 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
                 rates = l.rates,
                 budgets = budgetProgress(l.budgets, items, cats),
                 missingRates = missing.sorted(),
+                accounts = x.accounts,
+                bills = x.bills,
+                splits = items.associateBy { it.tx.id }.let { byId -> x.splits.map { SplitUi(it, byId[it.txId]) } },
+                trips = x.trips,
+                templates = x.templates,
+                recurring = Insights.recurring(
+                    items.filter { it.isExpense && it.base > 0 }
+                        .map { Insights.Payment(it.tx.merchant, it.tx.amount, it.tx.currency, Dates.toDate(it.tx.timestamp)) },
+                ),
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, WalletState())
 
@@ -152,8 +218,9 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun loadTransaction(id: Long): TransactionEntity? = repo.getTransaction(id)
 
-    fun saveTransaction(tx: TransactionEntity, learnFrom: String?) = viewModelScope.launch {
-        repo.saveTransaction(tx.copy(needsReview = false))
+    fun saveTransaction(tx: TransactionEntity, learnFrom: String?, splits: List<SplitEntity>? = null) = viewModelScope.launch {
+        val id = repo.saveTransaction(tx.copy(needsReview = false))
+        if (splits != null) repo.saveSplits(id, splits)
         if (!learnFrom.isNullOrBlank()) {
             repo.learnRule(learnFrom, tx.categoryId, tx.allocationId)
             val n = repo.applyRulesToPending()
@@ -162,6 +229,26 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteTransaction(tx: TransactionEntity) = viewModelScope.launch { repo.deleteTransaction(tx) }
+
+    suspend fun loadSplits(txId: Long): List<SplitEntity> = repo.splitsFor(txId)
+    fun setSplitSettled(split: SplitEntity, settled: Boolean) = viewModelScope.launch { repo.setSplitSettled(split, settled) }
+
+    fun saveTrip(t: TripEntity) = viewModelScope.launch { repo.saveTrip(t); toast("Trip saved · matching expenses tagged") }
+    fun deleteTrip(t: TripEntity) = viewModelScope.launch { repo.deleteTrip(t) }
+    fun saveTemplate(t: TemplateEntity) = viewModelScope.launch { repo.saveTemplate(t); toast("Template “${t.name}” saved") }
+    fun deleteTemplate(t: TemplateEntity) = viewModelScope.launch { repo.deleteTemplate(t) }
+    fun saveBill(b: BillEntity) = viewModelScope.launch { repo.saveBill(b) }
+    fun deleteBill(b: BillEntity) = viewModelScope.launch { repo.deleteBill(b) }
+    fun deleteAccount(a: AccountEntity) = viewModelScope.launch { repo.deleteAccount(a) }
+    fun setSmartAlerts(on: Boolean) = viewModelScope.launch { repo.settings.setSmartAlerts(on) }
+    fun setReminders(on: Boolean) = viewModelScope.launch { repo.settings.setReminders(on) }
+
+    fun openShared(uri: Uri) = viewModelScope.launch {
+        runCatching { backup.inspect(uri) }
+            .onSuccess { _shared.value = it }
+            .onFailure { toast("That file isn't a Self Wallet backup") }
+    }
+    fun closeShared() { _shared.value = null }
     fun restoreTransaction(tx: TransactionEntity) = viewModelScope.launch { repo.saveTransaction(tx) }
 
     /** Flips a transaction between Personal and Corporate. */

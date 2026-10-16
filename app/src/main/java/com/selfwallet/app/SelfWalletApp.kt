@@ -8,6 +8,8 @@ import com.selfwallet.app.data.Repository
 import com.selfwallet.app.data.db.AppDatabase
 import com.selfwallet.app.data.prefs.SettingsStore
 import com.selfwallet.app.sms.Notifications
+import com.selfwallet.app.widget.SpendWidget
+import com.selfwallet.app.work.DailyWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,9 +27,11 @@ class AppContainer(context: Context) {
             scope.launch {
                 val s = settings.current()
                 if (s.autoBackup && s.backupUri != null) BackupScheduler.requestSoon(appContext)
+                SpendWidget.refresh(appContext)
             }
         },
         onBudgetAlert = { title, body -> Notifications.showBudget(appContext, title, body) },
+        onSmartAlert = { title, body -> Notifications.showInsight(appContext, title, body) },
     )
     val backup = BackupManager(appContext, repository)
 }
@@ -44,6 +48,7 @@ class SelfWalletApp : Application() {
             container.repository.ensureSeeded()
             val s = container.settings.current()
             if (s.autoBackup && s.backupUri != null) BackupScheduler.ensureDaily(this@SelfWalletApp)
+            DailyWorker.schedule(this@SelfWalletApp)
         }
     }
 }

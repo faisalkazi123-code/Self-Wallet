@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -37,6 +38,14 @@ data class Settings(
     val appLock: Boolean = false,
     /** Shown on PDF expense reports. */
     val ownerName: String = "",
+    /** Warn about unusually large payments. */
+    val smartAlerts: Boolean = true,
+    /** Remind about bills and upcoming recurring payments. */
+    val reminders: Boolean = true,
+    /** "2026-09": last month a monthly summary was sent for. */
+    val lastSummaryMonth: String = "",
+    /** Keys of recurring payments already reminded about ("merchant|date"). */
+    val remindedRecurring: Set<String> = emptySet(),
 )
 
 class SettingsStore(private val context: Context) {
@@ -57,6 +66,10 @@ class SettingsStore(private val context: Context) {
         val appStyle = stringPreferencesKey("app_style")
         val appLock = booleanPreferencesKey("app_lock")
         val ownerName = stringPreferencesKey("owner_name")
+        val smartAlerts = booleanPreferencesKey("smart_alerts")
+        val reminders = booleanPreferencesKey("reminders")
+        val lastSummaryMonth = stringPreferencesKey("last_summary_month")
+        val remindedRecurring = stringSetPreferencesKey("reminded_recurring")
     }
 
     val settings: Flow<Settings> = context.dataStore.data.map { it.toSettings() }
@@ -79,6 +92,10 @@ class SettingsStore(private val context: Context) {
         appStyle = this[Keys.appStyle] ?: "TEAL",
         appLock = this[Keys.appLock] ?: false,
         ownerName = this[Keys.ownerName] ?: "",
+        smartAlerts = this[Keys.smartAlerts] ?: true,
+        reminders = this[Keys.reminders] ?: true,
+        lastSummaryMonth = this[Keys.lastSummaryMonth] ?: "",
+        remindedRecurring = this[Keys.remindedRecurring] ?: emptySet(),
     )
 
     suspend fun setOnboardingDone(done: Boolean) = context.dataStore.edit { it[Keys.onboardingDone] = done }
@@ -94,6 +111,10 @@ class SettingsStore(private val context: Context) {
     suspend fun setAppStyle(style: String) = context.dataStore.edit { it[Keys.appStyle] = style }
     suspend fun setAppLock(on: Boolean) = context.dataStore.edit { it[Keys.appLock] = on }
     suspend fun setOwnerName(name: String) = context.dataStore.edit { it[Keys.ownerName] = name }
+    suspend fun setSmartAlerts(on: Boolean) = context.dataStore.edit { it[Keys.smartAlerts] = on }
+    suspend fun setReminders(on: Boolean) = context.dataStore.edit { it[Keys.reminders] = on }
+    suspend fun setLastSummaryMonth(month: String) = context.dataStore.edit { it[Keys.lastSummaryMonth] = month }
+    suspend fun setRemindedRecurring(keys: Set<String>) = context.dataStore.edit { it[Keys.remindedRecurring] = keys }
 
     suspend fun setBackupTarget(uri: String?, label: String?) = context.dataStore.edit {
         if (uri == null) {

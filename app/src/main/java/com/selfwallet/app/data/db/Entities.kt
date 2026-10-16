@@ -52,6 +52,76 @@ data class TransactionEntity(
     val receiptPath: String? = null,
     /** Claim.* for corporate expenses; null means not claimed yet. */
     val claimStatus: String? = null,
+    /** Travel-mode trip this expense belongs to. */
+    val tripId: Long? = null,
+)
+
+/** Latest balance or available credit limit seen in a bank SMS for one account/card. */
+@Serializable
+@Entity(tableName = "accounts", indices = [Index(value = ["accountKey"], unique = true)])
+data class AccountEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val accountKey: String,
+    val label: String,
+    val last4: String? = null,
+    val balance: Double,
+    val currency: String,
+    val isCreditLimit: Boolean = false,
+    val updatedAt: Long,
+)
+
+/** A bill / card payment that is due, read from a reminder SMS or added by hand. */
+@Serializable
+@Entity(tableName = "bills", indices = [Index(value = ["hash"], unique = true)])
+data class BillEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val amount: Double,
+    val currency: String,
+    /** Epoch day of the due date. */
+    val dueDay: Long,
+    val account: String? = null,
+    val paid: Boolean = false,
+    val hash: String,
+    /** 0 none, 1 = "due soon" sent, 2 = "due today" sent. */
+    val reminded: Int = 0,
+)
+
+/** Someone who owes you part of an expense. */
+@Serializable
+@Entity(tableName = "splits", indices = [Index("txId")])
+data class SplitEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val txId: Long,
+    val person: String,
+    val amount: Double,
+    val settled: Boolean = false,
+)
+
+/** Travel mode: expenses between [startDay] and [endDay] (epoch days) are tagged to this trip. */
+@Serializable
+@Entity(tableName = "trips")
+data class TripEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val startDay: Long,
+    val endDay: Long,
+    /** Optional destination applied to SMS expenses during the trip. */
+    val allocationId: Long? = null,
+)
+
+/** A saved expense the user adds often ("Taxi to office", "Coffee"). */
+@Serializable
+@Entity(tableName = "templates")
+data class TemplateEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val amount: Double,
+    val currency: String,
+    val type: String = TxType.EXPENSE,
+    val categoryId: Long? = null,
+    val allocationId: Long? = null,
+    val merchant: String = "",
 )
 
 /** Reimbursement progress of a corporate expense. */

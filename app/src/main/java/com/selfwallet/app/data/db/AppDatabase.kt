@@ -168,6 +168,123 @@ interface BudgetDao {
     suspend fun deleteForCategory(categoryId: Long)
 }
 
+@Dao
+interface AccountDao {
+    @Query("SELECT * FROM accounts ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<AccountEntity>>
+
+    @Query("SELECT * FROM accounts")
+    suspend fun getAll(): List<AccountEntity>
+
+    @Query("SELECT * FROM accounts WHERE accountKey = :key")
+    suspend fun byKey(key: String): AccountEntity?
+
+    @Upsert
+    suspend fun upsert(item: AccountEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(items: List<AccountEntity>)
+
+    @Delete
+    suspend fun delete(item: AccountEntity)
+
+    @Query("DELETE FROM accounts")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface BillDao {
+    @Query("SELECT * FROM bills ORDER BY paid, dueDay")
+    fun observeAll(): Flow<List<BillEntity>>
+
+    @Query("SELECT * FROM bills")
+    suspend fun getAll(): List<BillEntity>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(item: BillEntity): Long
+
+    @Upsert
+    suspend fun upsert(item: BillEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(items: List<BillEntity>)
+
+    @Delete
+    suspend fun delete(item: BillEntity)
+
+    @Query("DELETE FROM bills")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface SplitDao {
+    @Query("SELECT * FROM splits ORDER BY settled, id")
+    fun observeAll(): Flow<List<SplitEntity>>
+
+    @Query("SELECT * FROM splits")
+    suspend fun getAll(): List<SplitEntity>
+
+    @Query("SELECT * FROM splits WHERE txId = :txId ORDER BY id")
+    suspend fun forTx(txId: Long): List<SplitEntity>
+
+    @Query("DELETE FROM splits WHERE txId = :txId")
+    suspend fun deleteForTx(txId: Long)
+
+    @Upsert
+    suspend fun upsert(item: SplitEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(items: List<SplitEntity>)
+
+    @Query("DELETE FROM splits")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface TripDao {
+    @Query("SELECT * FROM trips ORDER BY startDay DESC")
+    fun observeAll(): Flow<List<TripEntity>>
+
+    @Query("SELECT * FROM trips")
+    suspend fun getAll(): List<TripEntity>
+
+    @Upsert
+    suspend fun upsert(item: TripEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(items: List<TripEntity>)
+
+    @Delete
+    suspend fun delete(item: TripEntity)
+
+    @Query("UPDATE transactions SET tripId = NULL WHERE tripId = :tripId")
+    suspend fun clearFromTransactions(tripId: Long)
+
+    @Query("DELETE FROM trips")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface TemplateDao {
+    @Query("SELECT * FROM templates ORDER BY name")
+    fun observeAll(): Flow<List<TemplateEntity>>
+
+    @Query("SELECT * FROM templates")
+    suspend fun getAll(): List<TemplateEntity>
+
+    @Upsert
+    suspend fun upsert(item: TemplateEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(items: List<TemplateEntity>)
+
+    @Delete
+    suspend fun delete(item: TemplateEntity)
+
+    @Query("DELETE FROM templates")
+    suspend fun deleteAll()
+}
+
 @Database(
     entities = [
         TransactionEntity::class,
@@ -176,8 +293,13 @@ interface BudgetDao {
         RuleEntity::class,
         RateEntity::class,
         BudgetEntity::class,
+        AccountEntity::class,
+        BillEntity::class,
+        SplitEntity::class,
+        TripEntity::class,
+        TemplateEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -187,11 +309,16 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun rules(): RuleDao
     abstract fun rates(): RateDao
     abstract fun budgets(): BudgetDao
+    abstract fun accounts(): AccountDao
+    abstract fun bills(): BillDao
+    abstract fun splits(): SplitDao
+    abstract fun trips(): TripDao
+    abstract fun templates(): TemplateDao
 
     companion object {
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "self_wallet.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -210,6 +337,38 @@ abstract class AppDatabase : RoomDatabase() {
                     "CREATE TABLE IF NOT EXISTS `budgets` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
                         "`categoryId` INTEGER, `kind` TEXT NOT NULL, `amount` REAL NOT NULL, " +
                         "`alertedMonth` TEXT, `alertedLevel` INTEGER NOT NULL)",
+                )
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN tripId INTEGER")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `accounts` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`accountKey` TEXT NOT NULL, `label` TEXT NOT NULL, `last4` TEXT, `balance` REAL NOT NULL, " +
+                        "`currency` TEXT NOT NULL, `isCreditLimit` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_accounts_accountKey` ON `accounts` (`accountKey`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `bills` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`title` TEXT NOT NULL, `amount` REAL NOT NULL, `currency` TEXT NOT NULL, `dueDay` INTEGER NOT NULL, " +
+                        "`account` TEXT, `paid` INTEGER NOT NULL, `hash` TEXT NOT NULL, `reminded` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_bills_hash` ON `bills` (`hash`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `splits` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`txId` INTEGER NOT NULL, `person` TEXT NOT NULL, `amount` REAL NOT NULL, `settled` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_splits_txId` ON `splits` (`txId`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `trips` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, `startDay` INTEGER NOT NULL, `endDay` INTEGER NOT NULL, `allocationId` INTEGER)",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `templates` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, `amount` REAL NOT NULL, `currency` TEXT NOT NULL, `type` TEXT NOT NULL, " +
+                        "`categoryId` INTEGER, `allocationId` INTEGER, `merchant` TEXT NOT NULL)",
                 )
             }
         }

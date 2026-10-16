@@ -72,6 +72,23 @@ import androidx.compose.ui.unit.dp
 import com.selfwallet.app.data.Budgets
 import com.selfwallet.app.data.db.AllocationEntity
 import com.selfwallet.app.data.db.BudgetEntity
+import com.selfwallet.app.data.db.BillEntity
+import com.selfwallet.app.data.db.TripEntity
+import com.selfwallet.app.ui.components.money
+import com.selfwallet.app.util.Dates
+import android.content.Intent
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Luggage
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.Surface
+import androidx.compose.material3.rememberDatePickerState
 import com.selfwallet.app.data.db.CategoryEntity
 import com.selfwallet.app.data.db.RateEntity
 import com.selfwallet.app.data.db.RuleEntity
@@ -94,12 +111,20 @@ fun ManageScreen(vm: WalletViewModel, state: WalletState, what: String, onBack: 
     var editingRule by remember { mutableStateOf<RuleEntity?>(null) }
     var editingRate by remember { mutableStateOf<RateEntity?>(null) }
     var editingBudget by remember { mutableStateOf<BudgetEntity?>(null) }
+    var editingTrip by remember { mutableStateOf<TripEntity?>(null) }
+    var editingBill by remember { mutableStateOf<BillEntity?>(null) }
+    val context = LocalContext.current
+    val hidden = state.settings.hideAmounts
 
     val title = when (what) {
         "allocations" -> "Expense for"
         "rules" -> "Auto-categorise rules"
         "rates" -> "Exchange rates"
         "budgets" -> "Monthly budgets"
+        "trips" -> "Trips (travel mode)"
+        "templates" -> "Templates"
+        "splits" -> "Friends owe you"
+        "upcoming" -> "Bills & subscriptions"
         else -> "Categories"
     }
 
@@ -108,6 +133,15 @@ fun ManageScreen(vm: WalletViewModel, state: WalletState, what: String, onBack: 
             "allocations" -> editingAllocation = AllocationEntity(name = "", kind = SpendKind.CORPORATE, color = Palette[13], sortOrder = state.allocations.size)
             "rules" -> editingRule = RuleEntity(keyword = "")
             "rates" -> editingRate = RateEntity(currency = state.missingRates.firstOrNull() ?: "", rate = 0.0)
+            "trips" -> {
+                val today = java.time.LocalDate.now().toEpochDay()
+                editingTrip = TripEntity(name = "", startDay = today, endDay = today + 6)
+            }
+            "upcoming" -> editingBill = BillEntity(
+                title = "", amount = 0.0, currency = state.base,
+                dueDay = java.time.LocalDate.now().plusDays(7).toEpochDay(), hash = "manual-${System.currentTimeMillis()}",
+            )
+            "templates", "splits" -> Unit
             "budgets" -> editingBudget = BudgetEntity(
                 categoryId = null,
                 kind = if (state.budgets.any { it.budget.categoryId == null && it.budget.kind == Budgets.ALL }) SpendKind.PERSONAL else Budgets.ALL,
@@ -127,7 +161,9 @@ fun ManageScreen(vm: WalletViewModel, state: WalletState, what: String, onBack: 
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { add() }, containerColor = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Add, "Add") }
+            if (what != "templates" && what != "splits") {
+                FloatingActionButton(onClick = { add() }, containerColor = MaterialTheme.colorScheme.primary) { Icon(Icons.Filled.Add, "Add") }
+            }
         },
     ) { inner ->
         LazyColumn(
@@ -169,6 +205,128 @@ fun ManageScreen(vm: WalletViewModel, state: WalletState, what: String, onBack: 
                             subtitle = listOfNotNull(c?.name, a?.name, r.renameTo?.takeIf { it.isNotBlank() }?.let { "rename to $it" }).joinToString(" · ").ifEmpty { "No action" },
                             onClick = { editingRule = r },
                         )
+                    }
+                }
+                "trips" -> {
+                    item {
+                        Hint("Create a trip with its dates. Every expense in that period is tagged to it automatically, and you can filter reports by trip. Optionally send the trip's SMS expenses to a company or client.")
+                    }
+                    if (state.trips.isEmpty()) {
+                        item { EmptyState(Icons.Filled.Luggage, "No trips yet", "Tap + before you travel, e.g. “London · Client X”.") }
+                    }
+                    items(state.trips, key = { it.id }) { t ->
+                        val spent = state.items.filter { it.tx.tripId == t.id && it.isExpense }.sumOf { it.base }
+                        val dest = state.allocations.firstOrNull { it.id == t.allocationId }?.name
+                        Row0(
+                            leading = { IconBadge(Icons.Filled.Luggage, MaterialTheme.colorScheme.primary) },
+                            title = t.name,
+                            subtitle = "${dayText(t.startDay)} – ${dayText(t.endDay)} · ${money(spent, state.base, hidden)}" + (dest?.let { " · $it" } ?: ""),
+                            onClick = { editingTrip = t },
+                        )
+                    }
+                }
+                "templates" -> {
+                    item {
+                        Hint("Templates appear at the top of the Add screen. Create one from any expense with the bookmark button. Tap a template here to delete it.")
+                    }
+                    if (state.templates.isEmpty()) {
+                        item { EmptyState(Icons.Filled.Bolt, "No templates yet", "Open Add, fill in an expense and tap the bookmark icon.") }
+                    }
+                    items(state.templates, key = { it.id }) { t ->
+                        val cat = state.categories.firstOrNull { it.id == t.categoryId }
+                        Row0(
+                            leading = { IconBadge(CategoryIcons.of(cat?.icon), cat?.color?.asColor() ?: MaterialTheme.colorScheme.primary) },
+                            title = t.name,
+                            subtitle = listOfNotNull(Currencies.format(t.amount, t.currency), cat?.name, t.merchant.takeIf { it.isNotBlank() }).joinToString(" · "),
+                            onClick = { vm.deleteTemplate(t) },
+                        )
+                    }
+                }
+                "splits" -> {
+                    val open = state.splits.filter { !it.split.settled }
+                    item {
+                        Hint("Money friends owe you from split expenses. Tap Remind to send them a message, or Settled when they pay.")
+                    }
+                    if (open.isEmpty()) {
+                        item { EmptyState(Icons.Filled.Groups, "All settled", "Split an expense from its edit screen with “Add person”.") }
+                    }
+                    open.groupBy { it.split.person.trim().lowercase() }.forEach { (_, list) ->
+                        item(key = "p" + list.first().split.id) {
+                            val person = list.first().split.person
+                            val totals = list.groupBy { it.currency }.map { (c, l) -> Currencies.format(l.sumOf { it.split.amount }, c) }
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(person, style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            "Owes you ${totals.joinToString(" + ")}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                    TextButton(onClick = {
+                                        val lines = list.joinToString("\n") { s ->
+                                            "• ${s.tx?.tx?.merchant?.ifBlank { null } ?: s.tx?.category?.name ?: "Expense"}" +
+                                                (s.tx?.let { " (${Dates.dayLabel(Dates.toDate(it.tx.timestamp))})" } ?: "") +
+                                                ": ${Currencies.format(s.split.amount, s.currency)}"
+                                        }
+                                        val msg = "Hi $person, a quick reminder for our shared expenses:\n$lines\nTotal: ${totals.joinToString(" + ")}. Thanks!"
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, msg), "Send reminder"),
+                                            )
+                                        }
+                                    }) { Text("Remind") }
+                                    TextButton(onClick = { list.forEach { vm.setSplitSettled(it.split, true) } }) { Text("Settled") }
+                                }
+                                list.forEach { s ->
+                                    Text(
+                                        "${s.tx?.tx?.merchant?.ifBlank { null } ?: s.tx?.category?.name ?: "Expense"} · ${Currencies.format(s.split.amount, s.currency)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        }
+                    }
+                }
+                "upcoming" -> {
+                    item {
+                        Hint("Card bills are read from your bank's reminder SMS; subscriptions and other repeating payments are spotted from your history. You get a reminder 2 days before and on the day.")
+                    }
+                    val upcoming = state.upcoming(60)
+                    if (upcoming.isEmpty()) {
+                        item { EmptyState(Icons.Filled.Autorenew, "Nothing due soon", "Bills and repeating payments will show up here.") }
+                    }
+                    items(upcoming.size) { i -> UpcomingRow(upcoming[i], hidden, onMarkPaid = { vm.saveBill(it.copy(paid = true)) }) }
+                    if (state.recurring.isNotEmpty()) {
+                        item { Text("Repeating payments", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 4.dp)) }
+                        items(state.recurring.size) { i ->
+                            val r = state.recurring[i]
+                            Row0(
+                                leading = { IconBadge(Icons.Filled.Autorenew, MaterialTheme.colorScheme.primary) },
+                                title = r.merchant,
+                                subtitle = "${r.label} · ~${money(r.amount, r.currency, hidden)} · next ${Dates.dayLabel(r.next)} · seen ${r.count}×",
+                                onClick = {},
+                            )
+                        }
+                    }
+                    val paid = state.bills.filter { it.paid }
+                    if (paid.isNotEmpty()) {
+                        item { Text("Paid bills", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 4.dp)) }
+                        items(paid, key = { "b" + it.id }) { b ->
+                            Row0(
+                                leading = { IconBadge(Icons.Filled.CheckCircle, MaterialTheme.colorScheme.primary) },
+                                title = b.title,
+                                subtitle = "${money(b.amount, b.currency, hidden)} · was due ${dayText(b.dueDay)}",
+                                onClick = { editingBill = b },
+                            )
+                        }
                     }
                 }
                 "budgets" -> {
@@ -278,6 +436,23 @@ fun ManageScreen(vm: WalletViewModel, state: WalletState, what: String, onBack: 
             onSave = { vm.saveRule(it); editingRule = null },
             onDelete = if (r.id != 0L) ({ vm.deleteRule(r); editingRule = null }) else null,
             onDismiss = { editingRule = null },
+        )
+    }
+    editingTrip?.let { t ->
+        TripDialog(
+            initial = t,
+            state = state,
+            onSave = { vm.saveTrip(it); editingTrip = null },
+            onDelete = if (t.id != 0L) ({ vm.deleteTrip(t); editingTrip = null }) else null,
+            onDismiss = { editingTrip = null },
+        )
+    }
+    editingBill?.let { b ->
+        BillDialog(
+            initial = b,
+            onSave = { vm.saveBill(it); editingBill = null },
+            onDelete = if (b.id != 0L) ({ vm.deleteBill(b); editingBill = null }) else null,
+            onDismiss = { editingBill = null },
         )
     }
     editingBudget?.let { b ->
@@ -541,6 +716,133 @@ private fun RuleDialog(initial: RuleEntity, state: WalletState, onSave: (RuleEnt
                     label = { Text("Rename merchant to (optional)") },
                     modifier = Modifier.fillMaxWidth(),
                 )
+            }
+        },
+        confirmButton = confirm,
+        dismissButton = dismiss,
+    )
+}
+
+private fun dayText(epochDay: Long): String = Dates.dayLabel(java.time.LocalDate.ofEpochDay(epochDay))
+
+@Composable
+private fun DayField(label: String, epochDay: Long, onPick: (Long) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Surface(
+        onClick = { open = true },
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.CalendarMonth, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
+            Text("$label: ${dayText(epochDay)}")
+        }
+    }
+    if (open) {
+        val picker = rememberDatePickerState(initialSelectedDateMillis = epochDay * 86_400_000L)
+        DatePickerDialog(
+            onDismissRequest = { open = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    picker.selectedDateMillis?.let { onPick(it / 86_400_000L) }
+                    open = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
+        ) { DatePicker(state = picker) }
+    }
+}
+
+@Composable
+private fun TripDialog(
+    initial: TripEntity,
+    state: WalletState,
+    onSave: (TripEntity) -> Unit,
+    onDelete: (() -> Unit)?,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf(initial.name) }
+    var start by remember { mutableLongStateOf(initial.startDay) }
+    var end by remember { mutableLongStateOf(initial.endDay) }
+    var allocationId by remember { mutableStateOf(initial.allocationId) }
+    val (confirm, dismiss) = DialogActions(
+        canSave = name.isNotBlank() && end >= start,
+        onSave = { onSave(initial.copy(name = name.trim(), startDay = start, endDay = end, allocationId = allocationId)) },
+        onDelete = onDelete,
+        onDismiss = onDismiss,
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Filled.Luggage, null) },
+        title = { Text(if (initial.id == 0L) "New trip" else "Edit trip") },
+        text = {
+            Column(
+                Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it }, singleLine = true,
+                    label = { Text("Trip name") },
+                    placeholder = { Text("e.g. London · Client X") },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                DayField("From", start) { start = it; if (end < it) end = it }
+                DayField("To", end) { end = maxOf(it, start) }
+                Text("SMS expenses during the trip go to", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(selected = allocationId == null, onClick = { allocationId = null }, label = { Text("Usual default") })
+                    state.allocations.forEach { a ->
+                        FilterChip(selected = allocationId == a.id, onClick = { allocationId = a.id }, label = { Text(a.name) })
+                    }
+                }
+            }
+        },
+        confirmButton = confirm,
+        dismissButton = dismiss,
+    )
+}
+
+@Composable
+private fun BillDialog(initial: BillEntity, onSave: (BillEntity) -> Unit, onDelete: (() -> Unit)?, onDismiss: () -> Unit) {
+    var title by remember { mutableStateOf(initial.title) }
+    var amount by remember { mutableStateOf(if (initial.amount > 0) trimRate(initial.amount) else "") }
+    var currency by remember { mutableStateOf(initial.currency) }
+    var due by remember { mutableLongStateOf(initial.dueDay) }
+    var paid by remember { mutableStateOf(initial.paid) }
+    val value = amount.replace(',', '.').toDoubleOrNull()
+    val (confirm, dismiss) = DialogActions(
+        canSave = title.isNotBlank() && value != null && value > 0 && currency.length == 3,
+        onSave = { onSave(initial.copy(title = title.trim(), amount = value ?: 0.0, currency = currency.uppercase(), dueDay = due, paid = paid, reminded = if (due != initial.dueDay) 0 else initial.reminded)) },
+        onDelete = onDelete,
+        onDismiss = onDismiss,
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial.id == 0L) "New bill" else "Edit bill") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(value = title, onValueChange = { title = it }, singleLine = true, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = amount, onValueChange = { amount = it }, singleLine = true, label = { Text("Amount") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = currency, onValueChange = { if (it.length <= 3) currency = it.uppercase() }, singleLine = true,
+                        label = { Text("Cur.") }, modifier = Modifier.width(90.dp),
+                    )
+                }
+                DayField("Due", due) { due = it }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = paid, onCheckedChange = { paid = it })
+                    Text("Paid")
+                }
             }
         },
         confirmButton = confirm,

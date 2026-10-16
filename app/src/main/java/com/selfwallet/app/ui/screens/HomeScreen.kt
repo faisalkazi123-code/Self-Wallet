@@ -18,10 +18,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Luggage
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Business
@@ -58,7 +65,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.selfwallet.app.data.db.SpendKind
+import com.selfwallet.app.data.db.AccountEntity
+import com.selfwallet.app.data.db.BillEntity
 import com.selfwallet.app.ui.BudgetUi
+import com.selfwallet.app.ui.Upcoming
 import com.selfwallet.app.ui.TxUi
 import com.selfwallet.app.ui.theme.LocalStyle
 import com.selfwallet.app.util.Currencies
@@ -100,6 +110,8 @@ fun HomeScreen(
     onDuplicates: () -> Unit,
     onClaims: () -> Unit,
     onBudgets: () -> Unit,
+    onManage: (String) -> Unit,
+    onMarkBillPaid: (BillEntity) -> Unit,
     onFixRates: () -> Unit,
     onToggleHide: () -> Unit,
 ) {
@@ -171,6 +183,18 @@ fun HomeScreen(
                     hidden = hidden,
                 )
             }
+            state.activeTrip?.let { trip ->
+                item {
+                    val tripSpent = state.items.filter { it.tx.tripId == trip.id && it.isExpense }.sumOf { it.base }
+                    Banner(
+                        icon = Icons.Filled.Luggage,
+                        title = "Travel mode: ${trip.name}",
+                        body = "${money(tripSpent, base, hidden)} spent so far · new expenses are tagged to this trip",
+                        action = "Trips",
+                        onClick = { onManage("trips") },
+                    )
+                }
+            }
             if (state.pendingDuplicates > 0) {
                 item {
                     val n = state.pendingDuplicates
@@ -208,6 +232,46 @@ fun HomeScreen(
             }
             if (kind == "ALL") {
                 item { SplitCards(allMonth, base, hidden, toClaim = state.toClaim, onClaims = onClaims) }
+                val owed = state.owedToMe
+                if (owed.isNotEmpty()) {
+                    item {
+                        val people = owed.map { it.split.person.trim().lowercase() }.distinct().size
+                        val byCurrency = owed.groupBy { it.currency }.map { (c, l) -> money(l.sumOf { it.split.amount }, c, hidden) }
+                        Banner(
+                            icon = Icons.Filled.Groups,
+                            title = "Friends owe you ${byCurrency.joinToString(" + ")}",
+                            body = "$people ${if (people == 1) "person hasn't" else "people haven't"} paid back yet",
+                            action = "View",
+                            onClick = { onManage("splits") },
+                        )
+                    }
+                }
+                if (state.accounts.isNotEmpty()) {
+                    item { SectionTitle("Accounts & cards") }
+                    item {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            items(state.accounts, key = { it.id }) { a -> AccountCard(a, hidden) }
+                        }
+                    }
+                }
+                val upcoming = state.upcoming(14)
+                if (upcoming.isNotEmpty()) {
+                    item {
+                        SectionTitle("Coming up") {
+                            TextButton(onClick = { onManage("upcoming") }) { Text("All") }
+                        }
+                    }
+                    item {
+                        AppCard(Modifier.padding(horizontal = 16.dp)) {
+                            Column(Modifier.padding(vertical = 4.dp)) {
+                                upcoming.take(4).forEach { u -> UpcomingRow(u, hidden, onMarkBillPaid) }
+                            }
+                        }
+                    }
+                }
                 val categoryBudgets = state.budgets.filter { it != state.overallBudget }
                 if (categoryBudgets.isNotEmpty()) {
                     item {
@@ -377,6 +441,80 @@ private fun SplitCards(items: List<TxUi>, base: String, hidden: Boolean, toClaim
             footnote = if (toClaim > 0) "${money(toClaim, base, hidden)} to claim" else null,
             onClick = if (toClaim > 0) onClaims else null,
         )
+    }
+}
+
+@Composable
+private fun AccountCard(a: AccountEntity, hidden: Boolean) {
+    AppCard(Modifier.width(180.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (a.isCreditLimit) Icons.Filled.CreditCard else Icons.Filled.AccountBalance, null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    a.label + (a.last4?.let { " ••$it" } ?: ""),
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                money(a.balance, a.currency, hidden),
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = LocalStyle.current.numberFont),
+                maxLines = 1,
+            )
+            Text(
+                (if (a.isCreditLimit) "Available limit" else "Balance") + " · " + Dates.dayLabel(Dates.toDate(a.updatedAt)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+fun UpcomingRow(u: Upcoming, hidden: Boolean, onMarkPaid: (BillEntity) -> Unit) {
+    val days = u.date.toEpochDay() - java.time.LocalDate.now().toEpochDay()
+    val whenText = when {
+        days < 0 -> "Overdue by ${-days} day${if (days == -1L) "" else "s"}"
+        days == 0L -> "Due today"
+        days == 1L -> "Tomorrow"
+        else -> "In $days days · ${Dates.dayLabel(u.date)}"
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (u.bill != null) Icons.AutoMirrored.Filled.ReceiptLong else Icons.Filled.Autorenew, null,
+            tint = if (days <= 2) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(u.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                "${u.kind} · $whenText",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (days <= 2) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                money(u.amount, u.currency, hidden),
+                style = MaterialTheme.typography.titleSmall.copy(fontFamily = LocalStyle.current.numberFont),
+            )
+            if (u.bill != null) {
+                TextButton(onClick = { onMarkPaid(u.bill) }) { Text("Mark paid") }
+            }
+        }
     }
 }
 

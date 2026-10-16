@@ -32,6 +32,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.EventRepeat
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.Luggage
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Savings
 import androidx.compose.material.icons.filled.Style
@@ -134,7 +141,7 @@ fun openAppSettings(context: Context) {
 }
 
 @Composable
-fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -> Unit) {
+fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -> Unit, onOpenShared: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val s = state.settings
@@ -176,6 +183,12 @@ fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -
                 val file = vm.inspectBackup(uri).getOrNull()
                 linkCandidate = uri to file
             }
+        }
+    }
+    val sharedPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            vm.openShared(uri)
+            onOpenShared()
         }
     }
     val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -256,6 +269,18 @@ fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -
                 ) { showDefaultAlloc = true }
                 Divider()
                 NavRow(Icons.Filled.Inbox, "Scan existing inbox", "Import past bank SMS", enabled = smsGranted) { showScan = true }
+                Divider()
+                SwitchRow(
+                    Icons.Filled.NotificationsActive, "Bill & subscription reminders",
+                    "Remind 2 days before card bills and repeating payments are due",
+                    checked = s.reminders,
+                ) { vm.setReminders(it) }
+                Divider()
+                SwitchRow(
+                    Icons.Filled.Insights, "Unusual spending alerts",
+                    "Warn when a payment is far bigger than usual",
+                    checked = s.smartAlerts,
+                ) { vm.setSmartAlerts(it) }
             }
 
             // ---------------- Organise ----------------
@@ -270,6 +295,14 @@ fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -
                     Icons.Filled.Savings, "Monthly budgets",
                     if (state.budgets.isEmpty()) "Get alerts at 80% and 100%" else "${state.budgets.size} set",
                 ) { onManage("budgets") }
+                Divider()
+                NavRow(Icons.Filled.EventRepeat, "Bills & subscriptions", "${state.upcoming(30).size} due in the next 30 days") { onManage("upcoming") }
+                Divider()
+                NavRow(Icons.Filled.Luggage, "Trips (travel mode)", if (state.trips.isEmpty()) "Tag expenses by trip automatically" else "${state.trips.size} trip${if (state.trips.size == 1) "" else "s"}") { onManage("trips") }
+                Divider()
+                NavRow(Icons.Filled.Groups, "Split expenses", "${state.owedToMe.size} open share${if (state.owedToMe.size == 1) "" else "s"}") { onManage("splits") }
+                Divider()
+                NavRow(Icons.Filled.Bolt, "Templates", "${state.templates.size} saved · quick-fill on the Add screen") { onManage("templates") }
                 Divider()
                 NavRow(Icons.Filled.Badge, "Your name on reports", s.ownerName.ifBlank { "Not set · shown on PDF expense reports" }) { showName = true }
                 Divider()
@@ -297,6 +330,10 @@ fun SettingsScreen(vm: WalletViewModel, state: WalletState, onManage: (String) -
                 Divider()
                 NavRow(Icons.Filled.Restore, "Restore from a backup file", "Replaces the data on this phone") {
                     restorePicker.launch(arrayOf("application/json", "application/octet-stream", "text/plain", "*/*"))
+                }
+                Divider()
+                NavRow(Icons.Filled.Visibility, "View a shared ledger", "Open a colleague's backup file read-only — nothing is merged") {
+                    sharedPicker.launch(arrayOf("application/json", "application/octet-stream", "text/plain", "*/*"))
                 }
             }
 

@@ -24,6 +24,11 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Luggage
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material3.AlertDialog
@@ -87,16 +92,20 @@ fun ReportsScreen(
     var offset by rememberSaveable { mutableIntStateOf(0) }
     var kind by rememberSaveable { mutableStateOf("ALL") }
     var allocationId by rememberSaveable { mutableLongStateOf(0L) }
+    var tripId by rememberSaveable { mutableLongStateOf(0L) }
+    val trip = state.trips.firstOrNull { it.id == tripId }
     val hidden = state.settings.hideAmounts
     val base = state.base
 
     val month = YearMonth.now().minusMonths(offset.toLong())
     val year = LocalDate.now().year - offset
     val range = if (yearly) Dates.yearRange(year) else Dates.monthRange(month)
-    val title = if (yearly) year.toString() else Dates.monthLabel(month)
+    val title = trip?.name ?: if (yearly) year.toString() else Dates.monthLabel(month)
 
-    val rows = remember(state.items, yearly, offset, kind, allocationId) {
-        state.items.inRange(range).byKind(kind).filter { allocationId == 0L || it.tx.allocationId == allocationId }
+    val rows = remember(state.items, yearly, offset, kind, allocationId, tripId) {
+        // A trip report covers the whole trip, whatever month is selected.
+        (if (trip != null) state.items.filter { it.tx.tripId == trip.id } else state.items.inRange(range))
+            .byKind(kind).filter { allocationId == 0L || it.tx.allocationId == allocationId }
     }
     val expenses = rows.filter { it.isExpense }
     val spent = expenses.sumOf { it.base }
@@ -197,6 +206,14 @@ fun ReportsScreen(
                     listOf("ALL" to "Everything", SpendKind.PERSONAL to "Personal", SpendKind.CORPORATE to "Corporate").forEach { (k, label) ->
                         FilterChip(selected = kind == k && allocationId == 0L, onClick = { kind = k; allocationId = 0L }, label = { Text(label) })
                     }
+                    state.trips.forEach { t ->
+                        FilterChip(
+                            selected = tripId == t.id,
+                            onClick = { tripId = if (tripId == t.id) 0L else t.id },
+                            label = { Text(t.name) },
+                            leadingIcon = { Icon(Icons.Filled.Luggage, null) },
+                        )
+                    }
                     state.allocations.forEach { a ->
                         FilterChip(
                             selected = allocationId == a.id,
@@ -243,6 +260,17 @@ fun ReportsScreen(
                             BarChart(values, labels, highlight = hl)
                         }
                     }
+                }
+            }
+
+            if (!yearly && trip == null) {
+                item {
+                    TrendsCard(
+                        state = state,
+                        month = month,
+                        filter = { list -> list.byKind(kind).filter { allocationId == 0L || it.tx.allocationId == allocationId } },
+                        hidden = hidden,
+                    )
                 }
             }
 
@@ -359,6 +387,100 @@ fun ReportsScreen(
             },
             dismissButton = { TextButton(onClick = { showPdf = false }) { Text("Cancel") } },
         )
+    }
+}
+
+/** Month-over-month change, the last 6 months and a spending calendar for [month]. */
+@Composable
+private fun TrendsCard(state: WalletState, month: YearMonth, filter: (List<TxUi>) -> List<TxUi>, hidden: Boolean) {
+    val base = state.base
+    val expenses = remember(state.items, month, filter) { filter(state.items).filter { it.isExpense } }
+    fun total(m: YearMonth) = expenses.inRange(Dates.monthRange(m)).sumOf { it.base }
+    val months = (5 downTo 0).map { month.minusMonths(it.toLong()) }
+    val totals = months.map { total(it) }
+    val now = totals.last()
+    val before = totals[totals.size - 2]
+    val change = if (before > 0) ((now - before) / before * 100).toInt() else null
+    val avg6 = totals.dropLast(1).filter { it > 0 }.let { if (it.isEmpty()) 0.0 else it.average() }
+
+    Column {
+    SectionTitle("Trends")
+    AppCard(
+        Modifier
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Row {
+                Stat(
+                    "vs ${Dates.shortMonthLabel(month.minusMonths(1))}",
+                    when {
+                        change == null -> "—"
+                        change > 0 -> "▲ $change%"
+                        change < 0 -> "▼ ${-change}%"
+                        else -> "Same"
+                    },
+                    Modifier.weight(1f),
+                )
+                Stat("5-month average", money(avg6, base, hidden), Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(16.dp))
+            BarChart(totals, months.map { Dates.shortMonthLabel(it) }, highlight = 5)
+            Spacer(Modifier.height(20.dp))
+            Text("Spending calendar", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(8.dp))
+            CalendarHeatmap(month, expenses.inRange(Dates.monthRange(month)))
+        }
+    }
+    }
+}
+
+@Composable
+private fun CalendarHeatmap(month: YearMonth, items: List<TxUi>) {
+    val byDay = items.groupBy { Dates.toDate(it.tx.timestamp).dayOfMonth }.mapValues { (_, l) -> l.sumOf { it.base } }
+    val max = byDay.values.maxOrNull()?.takeIf { it > 0 } ?: 1.0
+    val lead = month.atDay(1).dayOfWeek.value - 1 // Monday first
+    val cells = List(lead) { 0 } + (1..month.lengthOfMonth()).toList()
+    val color = MaterialTheme.colorScheme.primary
+    val empty = MaterialTheme.colorScheme.surfaceContainerHigh
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf("M", "T", "W", "T", "F", "S", "S").forEach {
+                Text(
+                    it, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        cells.chunked(7).forEach { week ->
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                week.forEach { day ->
+                    val v = byDay[day] ?: 0.0
+                    val fill = when {
+                        day == 0 -> androidx.compose.ui.graphics.Color.Transparent
+                        v <= 0 -> empty
+                        else -> color.copy(alpha = (0.2f + 0.8f * (v / max).toFloat()).coerceIn(0.2f, 1f))
+                    }
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                            .clip(MaterialTheme.shapes.extraSmall)
+                            .background(fill),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (day != 0) {
+                            Text(
+                                day.toString(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (v / max > 0.55) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                repeat(7 - week.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
     }
 }
 

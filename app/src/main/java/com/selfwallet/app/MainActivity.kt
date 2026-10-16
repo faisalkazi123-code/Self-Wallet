@@ -30,6 +30,9 @@ class MainActivity : FragmentActivity() {
     /** Transaction to open, set when the user taps an "auto-added" notification. */
     private val openTxId = mutableLongStateOf(0L)
 
+    /** Screen requested by the widget, app shortcut or a notification (Notifications.OPEN_*). */
+    private val openTarget = mutableStateOf<String?>(null)
+
     private val unlocked = mutableStateOf(false)
     private var backgroundedAt = 0L
 
@@ -59,6 +62,8 @@ class MainActivity : FragmentActivity() {
                         state = state,
                         openTxId = openTxId.longValue,
                         onOpenTxConsumed = { openTxId.longValue = 0L },
+                        openTarget = openTarget.value,
+                        onOpenTargetConsumed = { openTarget.value = null },
                     )
                 }
             }
@@ -90,6 +95,8 @@ class MainActivity : FragmentActivity() {
     private fun readIntent(intent: Intent?) {
         val id = intent?.getLongExtra(Notifications.EXTRA_TX_ID, 0L) ?: 0L
         if (id != 0L) openTxId.longValue = id
+        intent?.getStringExtra(Notifications.EXTRA_OPEN)?.let { openTarget.value = it }
+        if (intent?.action == ACTION_ADD) openTarget.value = Notifications.OPEN_ADD
     }
 
     private fun authenticate() {
@@ -117,6 +124,7 @@ class MainActivity : FragmentActivity() {
 
     companion object {
         private const val KEY_UNLOCKED = "unlocked"
+        const val ACTION_ADD = "com.selfwallet.app.ADD"
         private const val RELOCK_AFTER_MS = 30_000L
         const val AUTHENTICATORS = BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL
 

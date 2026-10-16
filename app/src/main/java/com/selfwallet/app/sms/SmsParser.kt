@@ -1,5 +1,7 @@
 package com.selfwallet.app.sms
 
+import java.time.LocalDate
+
 /**
  * Turns a bank / card / wallet SMS into a transaction. Pure Kotlin so it can be unit tested.
  *
@@ -15,6 +17,18 @@ object SmsParser {
         val currency: String,
         val kind: Kind,
         val merchant: String?,
+        val account: String?,
+        /** "Avl Bal" / "Avl Limit" reported in the same SMS, if any. */
+        val balance: Double? = null,
+        val balanceCurrency: String? = null,
+        val balanceIsLimit: Boolean = false,
+    )
+
+    /** A card bill or loan payment that is due. */
+    data class Due(
+        val amount: Double,
+        val currency: String,
+        val dueDate: LocalDate,
         val account: String?,
     )
 
@@ -151,13 +165,100 @@ object SmsParser {
         val merchant = findMerchant(text, kind) ?: senderName(sender)
         val account = accountPattern.find(text)?.groupValues?.get(1)
 
+        val balance = findBalance(text)
         return Result(
             amount = money.first,
             currency = money.second,
             kind = kind,
             merchant = merchant,
             account = account,
+            balance = balance?.amount,
+            balanceCurrency = balance?.currency,
+            balanceIsLimit = balance?.isLimit ?: false,
         )
+    }
+
+    private data class MoneyHit(val start: Int, val amount: Double, val currency: String, val before: String)
+
+    private fun moneyHits(text: String): List<MoneyHit> {
+        val raw = buildList {
+            currencyThenNumber.findAll(text).forEach { add(Triple(it.range.first, it.groupValues[1], it.groupValues[2])) }
+            numberThenCurrency.findAll(text).forEach { add(Triple(it.range.first, it.groupValues[2], it.groupValues[1])) }
+        }.sortedBy { it.first }
+        return raw.mapNotNull { (start, token, number) ->
+            val value = number.replace(",", "").trimEnd('.').toDoubleOrNull() ?: return@mapNotNull null
+            val code = currencyAliases[token.lowercase()] ?: return@mapNotNull null
+            if (value <= 0.0) return@mapNotNull null
+            MoneyHit(start, value, code, text.substring(maxOf(0, start - 22), start).lowercase())
+        }
+    }
+
+    data class Balance(val amount: Double, val currency: String, val isLimit: Boolean)
+
+    /** The "available balance" or "available limit" figure in a bank SMS. */
+    internal fun findBalance(text: String): Balance? {
+        val hit = moneyHits(text).firstOrNull { h ->
+            listOf("bal", "avl", "avbl", "available").any { h.before.contains(it) } && !h.before.contains("outstanding")
+        } ?: return null
+        val isLimit = hit.before.contains("lmt") || hit.before.contains("limit")
+        return Balance(hit.amount, hit.currency, isLimit)
+    }
+
+    private val dueWords = Regex(
+        "\\b(is due|due on|due date|due by|payment due|pay by|amount due|amt due|due amt|payable by)\\b",
+        RegexOption.IGNORE_CASE,
+    )
+    private val months = listOf("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+    private val numericDate = Regex("\\b(\\d{1,2})[-/.](\\d{1,2})(?:[-/.](\\d{2,4}))?\\b")
+    private val dayMonthName = Regex("\\b(\\d{1,2})(?:st|nd|rd|th)?[- ]?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?[-, ]*(\\d{2,4})?", RegexOption.IGNORE_CASE)
+    private val monthNameDay = Regex("\\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.? (\\d{1,2})(?:st|nd|rd|th)?,? ?(\\d{4})?", RegexOption.IGNORE_CASE)
+
+    /**
+     * Recognises "your card bill of Rs 4,500 is due on 05-11" style reminders.
+     * [received] anchors dates that have no year.
+     */
+    fun parseDue(sender: String, body: String, received: LocalDate): Due? {
+        val text = body.replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
+        if (otp.containsMatchIn(text)) return null
+        val due = dueWords.find(text) ?: return null
+        if (Regex("\\b(debited|spent|paid|credited|received)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text) &&
+            !Regex("\\b(bill|statement|emi|due)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        ) return null
+        val money = moneyHits(text).firstOrNull { h -> !h.before.contains("min") && !h.before.contains("avl") && !h.before.contains("limit") }
+            ?: return null
+        // Prefer a date after the "due" phrase; fall back to any date in the message.
+        val after = text.substring(due.range.first)
+        val date = findDate(after, received) ?: findDate(text, received) ?: return null
+        if (date.isBefore(received.minusDays(1))) return null
+        return Due(money.amount, money.currency, date, accountPattern.find(text)?.groupValues?.get(1))
+    }
+
+    internal fun findDate(text: String, received: LocalDate): LocalDate? {
+        fun fixYear(y: String?, m: Int, d: Int): LocalDate? = runCatching {
+            if (y.isNullOrEmpty()) {
+                val candidate = LocalDate.of(received.year, m, d)
+                if (candidate.isBefore(received.minusDays(15))) candidate.plusYears(1) else candidate
+            } else {
+                val year = y.toInt().let { if (it < 100) 2000 + it else it }
+                LocalDate.of(year, m, d)
+            }
+        }.getOrNull()
+
+        val candidates = buildList {
+            dayMonthName.find(text)?.let { m ->
+                add(m.range.first to fixYear(m.groupValues[3], months.indexOf(m.groupValues[2].lowercase()) + 1, m.groupValues[1].toInt()))
+            }
+            monthNameDay.find(text)?.let { m ->
+                add(m.range.first to fixYear(m.groupValues[3], months.indexOf(m.groupValues[1].lowercase()) + 1, m.groupValues[2].toInt()))
+            }
+            numericDate.findAll(text).forEach { m ->
+                val a = m.groupValues[1].toInt()
+                val b = m.groupValues[2].toInt()
+                // Day-first is the norm for bank SMS in the Gulf and South Asia.
+                if (b in 1..12 && a in 1..31) add(m.range.first to fixYear(m.groupValues[3], b, a))
+            }
+        }
+        return candidates.filter { it.second != null }.minByOrNull { it.first }?.second
     }
 
     /** Returns (amount, ISO currency) for the first amount that is not a balance or limit. */

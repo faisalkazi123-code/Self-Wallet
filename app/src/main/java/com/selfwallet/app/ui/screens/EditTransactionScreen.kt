@@ -101,6 +101,20 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.selfwallet.app.data.db.Claim
 import com.selfwallet.app.util.Receipts
+import com.selfwallet.app.util.VoiceParser
+import com.selfwallet.app.data.db.SplitEntity
+import com.selfwallet.app.data.db.TemplateEntity
+import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.Luggage
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Checkbox
 import com.selfwallet.app.data.DuplicateCheck
 import com.selfwallet.app.data.db.SpendKind
 import com.selfwallet.app.data.db.TransactionEntity
@@ -147,6 +161,10 @@ fun EditTransactionScreen(
     var receiptPath by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingCapture by rememberSaveable { mutableStateOf<String?>(null) }
     var showReceipt by remember { mutableStateOf(false) }
+    var tripId by rememberSaveable { mutableLongStateOf(0L) }
+    var splits by remember { mutableStateOf<List<SplitEntity>>(emptyList()) }
+    var addPerson by remember { mutableStateOf(false) }
+    var saveTemplate by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
@@ -159,6 +177,18 @@ fun EditTransactionScreen(
             }
         } else {
             Receipts.delete(path)
+        }
+    }
+    val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val heard = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return@rememberLauncherForActivityResult
+        val v = VoiceParser.parse(heard, state.categories.map { it.name })
+        if (v.income) type = TxType.INCOME
+        v.amount?.let { amount = formatPlain(it, v.currency ?: currency) }
+        v.currency?.let { currency = it }
+        if (v.merchant.isNotBlank()) merchant = v.merchant
+        v.categoryName?.let { n -> state.categories.firstOrNull { it.name == n && it.type == type }?.let { categoryId = it.id } }
+        v.corporate?.let { corp ->
+            scope.launch { allocationId = vm.destinationFor(if (corp) SpendKind.CORPORATE else SpendKind.PERSONAL).id }
         }
     }
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -187,9 +217,13 @@ fun EditTransactionScreen(
                 learn = tx.needsReview
                 claim = Claim.of(tx)
                 receiptPath = tx.receiptPath
+                tripId = tx.tripId ?: 0L
+                splits = vm.loadSplits(tx.id)
                 loaded = true
             }
         } else {
+            val today = Dates.toDate(timestamp).toEpochDay()
+            if (tripId == 0L) tripId = state.trips.firstOrNull { today in it.startDay..it.endDay }?.id ?: 0L
             runCatching { amountFocus.requestFocus() }
         }
     }
@@ -212,9 +246,10 @@ fun EditTransactionScreen(
             timestamp = timestamp,
             receiptPath = receiptPath,
             claimStatus = if (currentKind == SpendKind.CORPORATE && type == TxType.EXPENSE) claim else base.claimStatus,
+            tripId = tripId.takeIf { it != 0L },
         )
         val keyword = if (fromSms && learn && merchant.isNotBlank()) merchant.trim() else null
-        vm.saveTransaction(tx, keyword)
+        vm.saveTransaction(tx, keyword, if (type == TxType.EXPENSE) splits else emptyList())
         onDone()
     }
 
@@ -225,6 +260,18 @@ fun EditTransactionScreen(
                 navigationIcon = { IconButton(onClick = onDone) { Icon(Icons.Filled.Close, "Close") } },
                 title = { Text(if (id == 0L) "New transaction" else "Edit transaction") },
                 actions = {
+                    if (id == 0L) {
+                        IconButton(onClick = {
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                .putExtra(RecognizerIntent.EXTRA_PROMPT, "Say e.g. “Lunch 45 dirhams corporate”")
+                                .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                            runCatching { voice.launch(intent) }
+                        }) { Icon(Icons.Filled.Mic, "Add by voice") }
+                    }
+                    if (parsedAmount > 0) {
+                        IconButton(onClick = { saveTemplate = true }) { Icon(Icons.Filled.BookmarkAdd, "Save as template") }
+                    }
                     if (original != null) {
                         IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Filled.Delete, "Delete") }
                     }
@@ -292,6 +339,30 @@ fun EditTransactionScreen(
                         },
                         shape = SegmentedButtonDefaults.itemShape(i, 2),
                     ) { Text(label) }
+                }
+            }
+
+            // ---- templates (new entries only) ----
+            if (id == 0L && state.templates.isNotEmpty()) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 12.dp),
+                ) {
+                    items(state.templates, key = { it.id }) { t ->
+                        AssistChip(
+                            onClick = {
+                                type = t.type
+                                amount = formatPlain(t.amount, t.currency)
+                                currency = t.currency
+                                merchant = t.merchant
+                                categoryId = t.categoryId ?: 0L
+                                if (t.allocationId != null) allocationId = t.allocationId
+                            },
+                            label = { Text(t.name) },
+                            leadingIcon = { Icon(Icons.Filled.Bolt, null, Modifier.size(16.dp)) },
+                        )
+                    }
                 }
             }
 
@@ -451,6 +522,29 @@ fun EditTransactionScreen(
                 )
             }
 
+            // ---- trip ----
+            if (state.trips.isNotEmpty()) {
+                Text(
+                    "Trip",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 4.dp),
+                )
+                FlowRow(
+                    Modifier.padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(selected = tripId == 0L, onClick = { tripId = 0L }, label = { Text("None") })
+                    state.trips.take(6).forEach { t ->
+                        FilterChip(
+                            selected = tripId == t.id,
+                            onClick = { tripId = t.id },
+                            label = { Text(t.name) },
+                            leadingIcon = { Icon(Icons.Filled.Luggage, null, Modifier.size(16.dp)) },
+                        )
+                    }
+                }
+            }
+
             // ---- claim status (corporate expenses) ----
             if (currentKind == SpendKind.CORPORATE && type == TxType.EXPENSE) {
                 Text(
@@ -522,6 +616,56 @@ fun EditTransactionScreen(
                         Spacer(Modifier.width(8.dp))
                         Text("From gallery")
                     }
+                }
+            }
+
+            // ---- split with friends ----
+            if (type == TxType.EXPENSE) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 8.dp, top = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Split with friends", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { addPerson = true }) {
+                        Icon(Icons.Filled.PersonAdd, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Add person")
+                    }
+                }
+                if (splits.isNotEmpty()) {
+                    splits.forEachIndexed { i, sp ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = sp.settled,
+                                onCheckedChange = { c -> splits = splits.toMutableList().also { it[i] = sp.copy(settled = c) } },
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(sp.person, style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    if (sp.settled) "Paid you back" else "Owes you",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text(Currencies.format(sp.amount, currency), style = MaterialTheme.typography.titleSmall)
+                            IconButton(onClick = {
+                                splits = evenSplit(splits.filterIndexed { j, _ -> j != i }, parsedAmount)
+                            }) { Icon(Icons.Filled.Close, "Remove ${sp.person}", Modifier.size(18.dp)) }
+                        }
+                    }
+                    Text(
+                        "Your share: ${Currencies.format(parsedAmount - splits.sumOf { it.amount }, currency)} · split equally",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp),
+                    )
                 }
             }
 
@@ -623,6 +767,72 @@ fun EditTransactionScreen(
 
     if (showReceipt && receiptPath != null) {
         ReceiptViewer(path = receiptPath!!, onDismiss = { showReceipt = false })
+    }
+
+    if (addPerson) {
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { addPerson = false },
+            title = { Text("Who shared this?") },
+            text = {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it }, singleLine = true,
+                    label = { Text("Name") },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        splits = evenSplit(splits + SplitEntity(txId = 0, person = name.trim(), amount = 0.0), parsedAmount)
+                        addPerson = false
+                    },
+                ) { Text("Add") }
+            },
+            dismissButton = { TextButton(onClick = { addPerson = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (saveTemplate) {
+        var name by remember { mutableStateOf(merchant.ifBlank { state.categories.firstOrNull { it.id == categoryId }?.name.orEmpty() }) }
+        AlertDialog(
+            onDismissRequest = { saveTemplate = false },
+            icon = { Icon(Icons.Filled.BookmarkAdd, null) },
+            title = { Text("Save as template") },
+            text = {
+                Column {
+                    Text("Reuse this amount, category and destination with one tap next time.")
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = name, onValueChange = { name = it }, singleLine = true,
+                        label = { Text("Template name") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        vm.saveTemplate(
+                            TemplateEntity(
+                                name = name.trim(),
+                                amount = parsedAmount,
+                                currency = currency,
+                                type = type,
+                                categoryId = categoryId.takeIf { it != 0L },
+                                allocationId = allocationId.takeIf { it != 0L },
+                                merchant = merchant.trim(),
+                            ),
+                        )
+                        saveTemplate = false
+                    },
+                ) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { saveTemplate = false }) { Text("Cancel") } },
+        )
     }
 
     if (confirmDelete) {
@@ -894,6 +1104,13 @@ fun CurrencySheet(selected: String, recent: List<String>, onPick: (String) -> Un
             }
         }
     }
+}
+
+/** Shares [total] equally between the people and the user (the user keeps one share). */
+private fun evenSplit(people: List<SplitEntity>, total: Double): List<SplitEntity> {
+    if (people.isEmpty()) return people
+    val share = Math.round(total / (people.size + 1) * 100) / 100.0
+    return people.map { it.copy(amount = share) }
 }
 
 private fun formatPlain(amount: Double, currency: String): String {

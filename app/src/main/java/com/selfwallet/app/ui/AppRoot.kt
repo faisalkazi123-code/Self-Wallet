@@ -46,6 +46,8 @@ import com.selfwallet.app.ui.screens.ManageScreen
 import com.selfwallet.app.ui.screens.OnboardingScreen
 import com.selfwallet.app.ui.screens.ReportsScreen
 import com.selfwallet.app.ui.screens.SettingsScreen
+import com.selfwallet.app.ui.screens.SharedLedgerScreen
+import com.selfwallet.app.sms.Notifications
 import com.selfwallet.app.ui.screens.TransactionsScreen
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
@@ -64,7 +66,14 @@ object Routes {
 }
 
 @Composable
-fun AppRoot(vm: WalletViewModel, state: WalletState, openTxId: Long, onOpenTxConsumed: () -> Unit) {
+fun AppRoot(
+    vm: WalletViewModel,
+    state: WalletState,
+    openTxId: Long,
+    onOpenTxConsumed: () -> Unit,
+    openTarget: String? = null,
+    onOpenTargetConsumed: () -> Unit = {},
+) {
     if (!state.loaded) {
         Box(Modifier.fillMaxSize())
         return
@@ -73,13 +82,20 @@ fun AppRoot(vm: WalletViewModel, state: WalletState, openTxId: Long, onOpenTxCon
         if (!done) {
             OnboardingScreen(vm = vm, state = state)
         } else {
-            MainShell(vm, state, openTxId, onOpenTxConsumed)
+            MainShell(vm, state, openTxId, onOpenTxConsumed, openTarget, onOpenTargetConsumed)
         }
     }
 }
 
 @Composable
-private fun MainShell(vm: WalletViewModel, state: WalletState, openTxId: Long, onOpenTxConsumed: () -> Unit) {
+private fun MainShell(
+    vm: WalletViewModel,
+    state: WalletState,
+    openTxId: Long,
+    onOpenTxConsumed: () -> Unit,
+    openTarget: String?,
+    onOpenTargetConsumed: () -> Unit,
+) {
     val nav = rememberNavController()
     val snackbar = remember { SnackbarHostState() }
     val backStack by nav.currentBackStackEntryAsState()
@@ -92,6 +108,15 @@ private fun MainShell(vm: WalletViewModel, state: WalletState, openTxId: Long, o
                 is UiEvent.Message -> snackbar.showSnackbar(e.text)
             }
         }
+    }
+    LaunchedEffect(openTarget) {
+        when (openTarget) {
+            null -> return@LaunchedEffect
+            Notifications.OPEN_ADD -> nav.navigate(Routes.edit())
+            Notifications.OPEN_UPCOMING -> nav.navigate(Routes.manage("upcoming"))
+            Notifications.OPEN_REPORTS -> nav.goToTab("reports")
+        }
+        onOpenTargetConsumed()
     }
     LaunchedEffect(openTxId) {
         if (openTxId != 0L) {
@@ -140,6 +165,8 @@ private fun MainShell(vm: WalletViewModel, state: WalletState, openTxId: Long, o
                     onDuplicates = { nav.navigate(Routes.transactions("dups")) { launchSingleTop = true } },
                     onClaims = { nav.navigate(Routes.transactions("claims")) { launchSingleTop = true } },
                     onBudgets = { nav.navigate(Routes.manage("budgets")) },
+                    onManage = { nav.navigate(Routes.manage(it)) },
+                    onMarkBillPaid = { vm.saveBill(it.copy(paid = true)) },
                     onFixRates = { nav.navigate(Routes.manage("rates")) },
                     onToggleHide = { vm.setHideAmounts(!state.settings.hideAmounts) },
                 )
@@ -169,7 +196,12 @@ private fun MainShell(vm: WalletViewModel, state: WalletState, openTxId: Long, o
                 )
             }
             composable("settings") {
-                SettingsScreen(vm = vm, state = state, onManage = { nav.navigate(Routes.manage(it)) })
+                SettingsScreen(
+                    vm = vm,
+                    state = state,
+                    onManage = { nav.navigate(Routes.manage(it)) },
+                    onOpenShared = { nav.navigate("shared") },
+                )
             }
             composable(
                 "edit/{id}?type={type}",
@@ -186,6 +218,9 @@ private fun MainShell(vm: WalletViewModel, state: WalletState, openTxId: Long, o
                     onDone = { nav.popBackStack() },
                     onManage = { nav.navigate(Routes.manage(it)) },
                 )
+            }
+            composable("shared") {
+                SharedLedgerScreen(vm = vm, onBack = { vm.closeShared(); nav.popBackStack() })
             }
             composable("manage/{what}") { entry ->
                 ManageScreen(

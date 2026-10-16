@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Self Wallet</string>
+    <string name="widget_description">Today\'s and this month\'s spending with a quick add button</string>
+    <string name="shortcut_add">Add expense</string>
 </resources>

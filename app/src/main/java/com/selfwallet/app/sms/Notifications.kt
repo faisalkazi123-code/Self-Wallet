@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import com.selfwallet.app.MainActivity
 import com.selfwallet.app.R
 import com.selfwallet.app.data.DuplicateCheck
+import com.selfwallet.app.data.db.BillEntity
 import com.selfwallet.app.data.db.SpendKind
 import com.selfwallet.app.data.db.TransactionEntity
 import com.selfwallet.app.data.db.TxType
@@ -25,10 +26,17 @@ object Notifications {
     const val EXTRA_TX_ID = "tx_id"
     const val EXTRA_KIND = "kind"
     const val EXTRA_KEEP = "keep"
+    /** Screen to open from a notification: see OPEN_* constants. */
+    const val EXTRA_OPEN = "open"
+    const val OPEN_UPCOMING = "upcoming"
+    const val OPEN_ADD = "add"
+    const val OPEN_REPORTS = "reports"
     const val ACTION_SET_KIND = "com.selfwallet.app.SET_KIND"
     const val ACTION_RESOLVE_DUP = "com.selfwallet.app.RESOLVE_DUP"
     private const val DUP_CHANNEL = "duplicates"
     private const val BUDGET_CHANNEL = "budgets"
+    private const val REMINDER_CHANNEL = "reminders"
+    private const val INSIGHT_CHANNEL = "insights"
 
     fun createChannel(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
@@ -45,6 +53,56 @@ object Notifications {
                 description = "When a monthly budget reaches 80% or is exceeded"
             },
         )
+        nm.createNotificationChannel(
+            NotificationChannel(REMINDER_CHANNEL, "Bills & subscriptions", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Card bills and recurring payments that are due soon"
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(INSIGHT_CHANNEL, "Insights & unusual spending", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Monthly summary and unusually large payments"
+            },
+        )
+    }
+
+    private fun allowed(context: Context) = Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+    private fun simple(context: Context, channel: String, id: Int, title: String, text: String, color: Int, open: String? = null) {
+        if (!allowed(context)) return
+        val intent = Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        if (open != null) intent.putExtra(EXTRA_OPEN, open)
+        val pi = PendingIntent.getActivity(context, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val n = NotificationCompat.Builder(context, channel)
+            .setSmallIcon(R.drawable.ic_stat_wallet)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .setColor(color)
+            .build()
+        runCatching { NotificationManagerCompat.from(context).notify(id, n) }
+    }
+
+    fun showInsight(context: Context, title: String, text: String, open: String? = null) =
+        simple(context, INSIGHT_CHANNEL, (title + text).hashCode(), title, text, 0xFF0F766E.toInt(), open)
+
+    fun showReminder(context: Context, key: String, title: String, text: String) =
+        simple(context, REMINDER_CHANNEL, key.hashCode(), title, text, 0xFFB45309.toInt(), OPEN_UPCOMING)
+
+    fun showBill(context: Context, bill: BillEntity, hideAmount: Boolean, saved: Boolean) {
+        val amount = if (hideAmount) "••••" else Currencies.format(bill.amount, bill.currency)
+        val date = java.time.LocalDate.ofEpochDay(bill.dueDay)
+        val days = date.toEpochDay() - java.time.LocalDate.now().toEpochDay()
+        val whenText = when {
+            days < 0 -> "was due ${-days} day${if (days == -1L) "" else "s"} ago"
+            days == 0L -> "is due today"
+            days == 1L -> "is due tomorrow"
+            else -> "is due in $days days (${date.dayOfMonth} ${date.month.name.lowercase().replaceFirstChar { it.uppercase() }.take(3)})"
+        }
+        val title = if (saved) "Bill saved: ${bill.title}" else "Bill reminder: ${bill.title}"
+        showReminder(context, "bill-${bill.id}-$saved", title, "$amount $whenText." + if (saved) " We'll remind you before the due date." else "")
     }
 
     fun showBudget(context: Context, title: String, text: String) {

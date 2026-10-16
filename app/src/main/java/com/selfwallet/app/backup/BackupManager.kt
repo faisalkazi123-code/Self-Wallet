@@ -15,7 +15,12 @@ import androidx.work.WorkerParameters
 import com.selfwallet.app.SelfWalletApp
 import com.selfwallet.app.data.Repository
 import com.selfwallet.app.data.db.AllocationEntity
+import com.selfwallet.app.data.db.AccountEntity
+import com.selfwallet.app.data.db.BillEntity
 import com.selfwallet.app.data.db.BudgetEntity
+import com.selfwallet.app.data.db.SplitEntity
+import com.selfwallet.app.data.db.TemplateEntity
+import com.selfwallet.app.data.db.TripEntity
 import com.selfwallet.app.data.db.CategoryEntity
 import com.selfwallet.app.data.db.RateEntity
 import com.selfwallet.app.data.db.RuleEntity
@@ -42,6 +47,11 @@ data class BackupFile(
     val rates: List<RateEntity>,
     val transactions: List<TransactionEntity>,
     val budgets: List<BudgetEntity> = emptyList(),
+    val accounts: List<AccountEntity> = emptyList(),
+    val bills: List<BillEntity> = emptyList(),
+    val splits: List<SplitEntity> = emptyList(),
+    val trips: List<TripEntity> = emptyList(),
+    val templates: List<TemplateEntity> = emptyList(),
 )
 
 /**
@@ -69,6 +79,11 @@ class BackupManager(private val context: Context, private val repo: Repository) 
             rates = s.rates,
             transactions = s.transactions,
             budgets = s.budgets,
+            accounts = s.accounts,
+            bills = s.bills,
+            splits = s.splits,
+            trips = s.trips,
+            templates = s.templates,
         )
         val bytes = json.encodeToString(BackupFile.serializer(), file).toByteArray()
         val out = context.contentResolver.openOutputStream(uri, "wt")
@@ -94,6 +109,11 @@ class BackupManager(private val context: Context, private val repo: Repository) 
                 rates = file.rates,
                 transactions = file.transactions,
                 budgets = file.budgets,
+                accounts = file.accounts,
+                bills = file.bills,
+                splits = file.splits,
+                trips = file.trips,
+                templates = file.templates,
             ),
         )
         repo.settings.setBaseCurrency(file.baseCurrency)
