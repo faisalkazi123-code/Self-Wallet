@@ -1,0 +1,7 @@
+.env
+agent/config.json
+__pycache__/
+build/
+dist/
+*.spec
+agent/agent.log

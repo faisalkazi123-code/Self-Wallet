@@ -1,0 +1,3 @@
+{$SELFDESK_DOMAIN} {
+	reverse_proxy selfdesk:8080
+}

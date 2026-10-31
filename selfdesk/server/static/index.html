@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SelfDesk</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--ink:#1c2230;--muted:#667085;--line:#e3e6eb;--accent:#2f6fed;--bad:#d64545;--ok:#1f9d55}
+@media (prefers-color-scheme: dark){:root{--bg:#12151b;--card:#1b2029;--ink:#e8ebf0;--muted:#98a2b3;--line:#2a313d;--accent:#5b8dff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:720px;margin:0 auto;padding:24px 16px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+input,select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%}
+button{font:inherit;border:0;border-radius:8px;padding:9px 14px;background:var(--accent);color:#fff;cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:8px;align-items:end}
+.row>*{flex:1}.row>button{flex:0 0 auto}
+.dev{display:flex;align-items:center;gap:12px;padding:12px 4px;border-top:1px solid var(--line);cursor:pointer}
+.dev:first-child{border-top:0}
+.dev:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--ok);flex:0 0 auto}
+.dev .n{font-weight:600}.dev .m{color:var(--muted);font-size:13px}
+.err{color:var(--bad);margin-top:8px;min-height:1em}
+.empty{color:var(--muted);padding:8px 4px}
+#session{position:fixed;inset:0;background:#000;display:none;flex-direction:column}
+#bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 8px;background:#1b2029;color:#e8ebf0;font-size:13px}
+#bar select,#bar button{width:auto;padding:5px 8px;font-size:13px;background:#2a313d;color:#e8ebf0;border:0}
+#bar .title{font-weight:600;margin-right:auto}
+#bar .stat{color:#98a2b3;min-width:90px}
+#stage{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}
+#screen{max-width:100%;max-height:100%;cursor:default;outline:none;touch-action:none}
+#overlay{position:absolute;color:#ccc;font-size:16px}
+</style>
+</head>
+<body>
+<div class="wrap" id="home">
+  <h1>SelfDesk</h1>
+  <p class="sub">Your own remote desktop. Pick a PC to control.</p>
+
+  <div class="card" id="keyCard">
+    <label for="accessKey">Server access key</label>
+    <div class="row">
+      <input id="accessKey" type="password" autocomplete="current-password">
+      <button id="saveKey">Continue</button>
+    </div>
+    <label style="margin-top:8px;display:flex;gap:6px;align-items:center"><input id="remember" type="checkbox" style="width:auto"> Remember on this browser</label>
+    <div class="err" id="keyErr"></div>
+  </div>
+
+  <div class="card" id="devCard" style="display:none">
+    <div class="row" style="margin-bottom:8px">
+      <div><b>Online PCs</b></div>
+      <button class="ghost" id="refresh">Refresh</button>
+      <button class="ghost" id="logout">Forget key</button>
+    </div>
+    <div id="devices"></div>
+  </div>
+
+  <div class="card" id="connCard" style="display:none">
+    <div class="row">
+      <div><label for="devId">Device ID</label><input id="devId" inputmode="numeric" autocomplete="off"></div>
+      <div><label for="devPw">Device password</label><input id="devPw" type="password" autocomplete="off"></div>
+      <button id="connect">Connect</button>
+    </div>
+    <div class="err" id="connErr"></div>
+  </div>
+</div>
+
+<div id="session">
+  <div id="bar">
+    <span class="title" id="sTitle"></span>
+    <span class="stat" id="stat"></span>
+    <select id="monitor" title="Screen"></select>
+    <select id="quality" title="Quality">
+      <option value="35,1280,15">Fast</option>
+      <option value="60,1600,12" selected>Balanced</option>
+      <option value="85,2560,10">Sharp</option>
+    </select>
+    <button id="viewOnly" title="Stop sending mouse and keyboard">View only: off</button>
+    <button id="paste" title="Type text on the remote PC">Type text</button>
+    <button id="cad" title="Open Task Manager (Ctrl+Shift+Esc)">Task Manager</button>
+    <button id="full">Full screen</button>
+    <button id="disc" style="background:#d64545">Disconnect</button>
+  </div>
+  <div id="stage"><canvas id="screen" tabindex="0"></canvas><div id="overlay">Connecting…</div></div>
+</div>
+
+<script>
+// ---------- SHA-256 / HMAC (pure JS so it also works over plain http on a LAN) ----------
+const K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+function sha256(bytes){
+  const l=bytes.length,n=((l+9+63)>>6)<<6,m=new Uint8Array(n);m.set(bytes);m[l]=0x80;
+  const dv=new DataView(m.buffer);dv.setUint32(n-4,l*8>>>0);dv.setUint32(n-8,Math.floor(l/0x20000000));
+  let h=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];const w=new Uint32Array(64);
+  const r=(x,y)=>(x>>>y)|(x<<(32-y));
+  for(let o=0;o<n;o+=64){
+    for(let i=0;i<16;i++)w[i]=dv.getUint32(o+i*4);
+    for(let i=16;i<64;i++){const a=w[i-15],b=w[i-2];w[i]=(w[i-16]+(r(a,7)^r(a,18)^(a>>>3))+w[i-7]+(r(b,17)^r(b,19)^(b>>>10)))|0}
+    let [a,b,c,d,e,f,g,hh]=h;
+    for(let i=0;i<64;i++){const t1=(hh+(r(e,6)^r(e,11)^r(e,25))+((e&f)^(~e&g))+K[i]+w[i])|0,t2=((r(a,2)^r(a,13)^r(a,22))+((a&b)^(a&c)^(b&c)))|0;hh=g;g=f;f=e;e=(d+t1)|0;d=c;c=b;b=a;a=(t1+t2)|0}
+    h=[h[0]+a,h[1]+b,h[2]+c,h[3]+d,h[4]+e,h[5]+f,h[6]+g,h[7]+hh].map(x=>x|0);
+  }
+  const out=new Uint8Array(32);const ov=new DataView(out.buffer);h.forEach((x,i)=>ov.setUint32(i*4,x>>>0));return out;
+}
+const enc=s=>new TextEncoder().encode(s);
+const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
+function hmac(key,msg){
+  if(key.length>64)key=sha256(key);
+  const k=new Uint8Array(64);k.set(key);
+  const ip=k.map(x=>x^0x36),op=k.map(x=>x^0x5c);
+  const inner=new Uint8Array(64+msg.length);inner.set(ip);inner.set(msg,64);
+  const outer=new Uint8Array(96);outer.set(op);outer.set(sha256(inner),64);return sha256(outer);
+}
+
+// ---------- device list ----------
+const $=id=>document.getElementById(id);
+let key='';
+try{key=localStorage.getItem('selfdesk.key')||''}catch(e){}
+async function loadDevices(){
+  $('keyErr').textContent='';
+  const r=await fetch('/api/devices',{headers:{'X-Access-Key':key}});
+  if(!r.ok){$('keyErr').textContent=await r.text();showKey();return}
+  $('keyCard').style.display='none';$('devCard').style.display='';$('connCard').style.display='';
+  const list=await r.json(),box=$('devices');box.innerHTML='';
+  if(!list.length)box.innerHTML='<div class="empty">No PC is online. Start the agent on a PC first.</div>';
+  for(const d of list){
+    const el=document.createElement('div');el.className='dev';
+    el.innerHTML='<span class="dot"></span><div><div class="n"></div><div class="m"></div></div>';
+    el.querySelector('.n').textContent=d.name;
+    el.querySelector('.m').textContent=`ID ${d.id.replace(/(\d{3})(?=\d)/g,'$1 ')} · ${d.info}${d.viewers?` · ${d.viewers} viewing`:''}`;
+    el.onclick=()=>{$('devId').value=d.id;$('devPw').focus()};
+    box.appendChild(el);
+  }
+}
+function showKey(){$('keyCard').style.display='';$('devCard').style.display='none';$('connCard').style.display='none'}
+$('saveKey').onclick=()=>{key=$('accessKey').value.trim();try{if($('remember').checked)localStorage.setItem('selfdesk.key',key)}catch(e){}loadDevices()};
+$('accessKey').onkeydown=e=>{if(e.key==='Enter')$('saveKey').click()};
+$('refresh').onclick=loadDevices;
+$('logout').onclick=()=>{key='';try{localStorage.removeItem('selfdesk.key')}catch(e){}showKey()};
+$('devPw').onkeydown=e=>{if(e.key==='Enter')$('connect').click()};
+if(key)loadDevices();else showKey();
+
+// ---------- remote session ----------
+let ws=null,live=false,viewOnly=false,bytes=0,frames=0;
+const cv=$('screen'),ctx=cv.getContext('2d');
+const send=o=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))};
+
+$('connect').onclick=()=>{
+  const id=$('devId').value.replace(/\D/g,''),pw=$('devPw').value;
+  $('connErr').textContent='';
+  if(!id||!pw){$('connErr').textContent='Enter the device ID and password.';return}
+  const proto=location.protocol==='https:'?'wss':'ws';
+  ws=new WebSocket(`${proto}://${location.host}/ws/viewer?id=${id}&key=${encodeURIComponent(key)}`);
+  ws.binaryType='arraybuffer';
+  $('overlay').textContent='Connecting…';$('overlay').style.display='';
+  ws.onmessage=async ev=>{
+    if(typeof ev.data!=='string'){await drawPatch(ev.data);return}
+    const m=JSON.parse(ev.data);
+    if(m.type==='challenge'){
+      const k=sha256(enc(`selfdesk:${id}:${pw}`));
+      send({type:'auth',proof:hex(hmac(k,enc(m.nonce)))});
+    }else if(m.type==='auth_ok'){
+      live=true;$('devPw').value='';
+      $('home').style.display='none';$('session').style.display='flex';
+      $('sTitle').textContent=m.name||id;
+      const sel=$('monitor');sel.innerHTML='';
+      m.monitors.forEach(x=>{const o=document.createElement('option');o.value=x.index;o.textContent=`Screen ${x.index} (${x.width}×${x.height})`;sel.appendChild(o)});
+      sel.style.display=m.monitors.length>1?'':'none';
+      applySettings();cv.focus();
+    }else if(m.type==='auth_fail'){$('connErr').textContent=m.reason;}
+    else if(m.type==='closed'){$('connErr').textContent=m.reason;}
+  };
+  ws.onclose=ev=>{
+    if(!live&&!$('connErr').textContent)$('connErr').textContent=ev.code===1006?'Could not connect (device offline, or wrong access key).':'Connection closed.';
+    endSession();
+  };
+};
+function endSession(){
+  live=false;ws=null;$('session').style.display='none';$('home').style.display='';
+  if(document.fullscreenElement)document.exitFullscreen();loadDevices();
+}
+function applySettings(){
+  const [quality,max_width,fps]=$('quality').value.split(',').map(Number);
+  send({type:'settings',quality,max_width,fps,monitor:Number($('monitor').value||1),view_only:viewOnly});
+}
+$('quality').onchange=$('monitor').onchange=()=>{applySettings();cv.focus()};
+$('viewOnly').onclick=()=>{viewOnly=!viewOnly;$('viewOnly').textContent='View only: '+(viewOnly?'on':'off');applySettings();cv.focus()};
+$('disc').onclick=()=>ws&&ws.close();
+$('full').onclick=()=>{document.fullscreenElement?document.exitFullscreen():$('session').requestFullscreen().catch(()=>{});cv.focus()};
+$('cad').onclick=()=>{send({type:'combo',name:'ctrl_alt_del'});cv.focus()};
+$('paste').onclick=async()=>{
+  let t='';try{t=await navigator.clipboard.readText()}catch(e){}
+  t=prompt('Text to type on the remote PC:',t);if(t)send({type:'text',text:t});cv.focus();
+};
+
+async function drawPatch(buf){
+  const dv=new DataView(buf),W=dv.getUint16(0),H=dv.getUint16(2),x=dv.getUint16(4),y=dv.getUint16(6);
+  if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H}
+  try{
+    const bmp=await createImageBitmap(new Blob([new Uint8Array(buf,8)],{type:'image/jpeg'}));
+    ctx.drawImage(bmp,x,y);bmp.close&&bmp.close();
+  }catch(e){}
+  $('overlay').style.display='none';
+  bytes+=buf.byteLength;frames++;send({type:'ack'});
+}
+setInterval(()=>{if(live)$('stat').textContent=`${frames} fps · ${(bytes/1024|0)} KB/s`;bytes=0;frames=0},1000);
+
+// mouse
+function pos(e){const r=cv.getBoundingClientRect();return{x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height}}
+let pendingMove=null;
+cv.addEventListener('mousemove',e=>{if(!live||viewOnly)return;if(!pendingMove)requestAnimationFrame(()=>{send(pendingMove);pendingMove=null});pendingMove={type:'mouse',action:'move',...pos(e)}});
+cv.addEventListener('mousedown',e=>{if(!live||viewOnly)return;e.preventDefault();cv.focus();send({type:'mouse',action:'down',button:e.button,...pos(e)})});
+cv.addEventListener('mouseup',e=>{if(!live||viewOnly)return;e.preventDefault();send({type:'mouse',action:'up',button:e.button,...pos(e)})});
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+let wheelAcc=0;
+cv.addEventListener('wheel',e=>{if(!live||viewOnly)return;e.preventDefault();
+  wheelAcc+=e.deltaMode===1?e.deltaY*40:e.deltaY;const steps=Math.trunc(wheelAcc/100);
+  if(steps){wheelAcc-=steps*100;send({type:'wheel',dx:0,dy:-steps})}},{passive:false});
+// touch: tap = click, drag = move with button held
+cv.addEventListener('touchstart',e=>{if(!live||viewOnly)return;e.preventDefault();const p=pos(e.touches[0]);send({type:'mouse',action:'move',...p});send({type:'mouse',action:'down',button:0,...p})},{passive:false});
+cv.addEventListener('touchmove',e=>{if(!live||viewOnly)return;e.preventDefault();send({type:'mouse',action:'move',...pos(e.touches[0])})},{passive:false});
+cv.addEventListener('touchend',e=>{if(!live||viewOnly)return;e.preventDefault();send({type:'mouse',action:'up',button:0,...pos(e.changedTouches[0])})},{passive:false});
+// keyboard (only while the remote screen has focus)
+// Printable characters are sent as text, so any keyboard layout and Caps Lock work.
+// Shortcuts (Ctrl/Alt/Win + key) and special keys are sent as physical keys.
+const textCodes=new Set();
+cv.addEventListener('keydown',e=>{if(!live||viewOnly)return;e.preventDefault();
+  if(e.code==='CapsLock')return;
+  if(e.key.length===1&&!e.ctrlKey&&!e.altKey&&!e.metaKey){textCodes.add(e.code);send({type:'text',text:e.key});return}
+  send({type:'key',action:'down',code:e.code,key:e.key})});
+cv.addEventListener('keyup',e=>{if(!live||viewOnly)return;e.preventDefault();
+  if(e.code==='CapsLock')return;
+  if(textCodes.delete(e.code))return;
+  send({type:'key',action:'up',code:e.code,key:e.key})});
+cv.addEventListener('blur',()=>{if(live)textCodes.clear()});
+</script>
+</body>
+</html>

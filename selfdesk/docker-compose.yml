@@ -1,0 +1,21 @@
+# Run on a small cloud VPS (or any always-on machine) with a domain pointing to it.
+#   1. cp .env.example .env   and fill in the values
+#   2. docker compose up -d
+services:
+  selfdesk:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      SELFDESK_ENROLL_TOKEN: ${SELFDESK_ENROLL_TOKEN}
+      SELFDESK_ACCESS_KEY: ${SELFDESK_ACCESS_KEY}
+  caddy:  # automatic HTTPS certificate from Let's Encrypt
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      SELFDESK_DOMAIN: ${SELFDESK_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+volumes:
+  caddy_data:
