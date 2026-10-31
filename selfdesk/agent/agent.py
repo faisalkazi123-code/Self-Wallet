@@ -90,8 +90,9 @@ class Session:
 
 
 class Agent:
-    def __init__(self, cfg):
+    def __init__(self, cfg, on_status=None):
         self.cfg = cfg
+        self.on_status = on_status or (lambda state, detail="": None)
         self.sessions = {}
         self.fails = []
         self.ws = None
@@ -124,16 +125,19 @@ class Agent:
                                                max_msg_size=4 * 1024 * 1024) as ws:
                         self.ws = ws
                         delay = 2
+                        self.on_status("online")
                         log.info("connected to %s as device ID %s", self.cfg["server"], self.cfg["id"])
                         async for msg in ws:
                             if msg.type == aiohttp.WSMsgType.TEXT:
                                 await self.handle(json.loads(msg.data))
             except aiohttp.WSServerHandshakeError as e:
                 log.error("server refused connection: %s %s", e.status, e.message)
+                self.on_status("error", "wrong enroll token" if e.status == 401 else f"server said {e.status}")
                 if e.status == 401:
                     log.error("check the enroll token in %s", CONFIG)
             except (aiohttp.ClientError, OSError) as e:
                 log.warning("connection problem: %s", e)
+                self.on_status("offline", str(e)[:200])
             finally:
                 for s in list(self.sessions.values()):
                     self.close_session(s.sid)

@@ -1,0 +1,96 @@
+name: SelfDesk Windows agent
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["selfdesk/**", ".github/workflows/selfdesk-windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: selfdesk/agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: python -m pip install -r requirements.txt -r ../server/requirements.txt pyinstaller
+
+      - name: Build SelfDeskAgent.exe
+        run: |
+          "VERSION = `"1.0.${{ github.run_number }}`"" | Out-File -Encoding ascii build_info.py
+          python make_icon.py icon.ico
+          python -m PyInstaller --noconfirm --onefile --noconsole --name SelfDeskAgent --icon icon.ico `
+            --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 windows_app.py
+          Get-Item dist\SelfDeskAgent.exe | Format-List Name, Length
+
+      # Real end-to-end test of the packaged exe on a Windows desktop:
+      # silent install -> autostart entry -> agent connects -> viewer logs in,
+      # gets a screen frame and moves the mouse -> uninstall cleans up.
+      - name: End-to-end test
+        env:
+          SELFDESK_ENROLL_TOKEN: ci-enroll-token-123
+          SELFDESK_ACCESS_KEY: ci-access-key-123
+          SELFDESK_PORT: "8090"
+        run: |
+          $server = Start-Process python -ArgumentList "server.py" -WorkingDirectory ..\server -PassThru `
+            -RedirectStandardError $env:RUNNER_TEMP\server.log
+          Start-Sleep 3
+          $p = Start-Process dist\SelfDeskAgent.exe -Wait -PassThru -ArgumentList `
+            "--install","--server","http://127.0.0.1:8090","--token","ci-enroll-token-123","--name","CI PC","--password","ci-password-1"
+          if ($p.ExitCode -ne 0) { Get-Content "$env:LOCALAPPDATA\SelfDesk\install-error.txt"; throw "install failed" }
+          $dir = "$env:LOCALAPPDATA\SelfDesk"
+          if (-not (Test-Path "$dir\SelfDeskAgent.exe")) { throw "exe was not copied to $dir" }
+          $run = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SelfDesk Agent"
+          Write-Host "Autostart: $($run.'SelfDesk Agent')"
+          Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SelfDeskAgent" | Format-List DisplayName, DisplayVersion, UninstallString
+          $id = (Get-Content "$dir\config.json" | ConvertFrom-Json).id
+          python tests\e2e_viewer.py --url http://127.0.0.1:8090 --key ci-access-key-123 --id $id --password ci-password-1 --screenshot $env:RUNNER_TEMP\frame.jpg
+          $ok = $LASTEXITCODE
+          Write-Host "--- agent.log"; Get-Content "$dir\agent.log" -ErrorAction SilentlyContinue
+          if ($ok -ne 0) { Write-Host "--- server.log"; Get-Content $env:RUNNER_TEMP\server.log; throw "e2e failed" }
+          Start-Process dist\SelfDeskAgent.exe -Wait -ArgumentList "--uninstall","--quiet"
+          Start-Sleep 6
+          if (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SelfDesk Agent" -ErrorAction SilentlyContinue) { throw "autostart not removed" }
+          if (Get-Process SelfDeskAgent -ErrorAction SilentlyContinue) { throw "agent still running after uninstall" }
+          if (Test-Path $dir) { throw "install folder not removed" }
+          Write-Host "Uninstall OK"
+          Stop-Process $server
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SelfDeskAgent-windows
+          path: |
+            selfdesk/agent/dist/SelfDeskAgent.exe
+            ${{ runner.temp }}/frame.jpg
+
+      # Pushes to the default branch publish the exe as a GitHub Release
+      # (not marked "latest", so the Self Wallet APK download link is unaffected).
+      - name: Publish release
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: selfdesk-v1.0.${{ github.run_number }}
+          name: SelfDesk Agent for Windows 1.0.${{ github.run_number }}
+          make_latest: false
+          body: |
+            **Download `SelfDeskAgent.exe` and double-click it on the Windows PC you want to reach.**
+
+            - Enter your server URL, enroll token, a name and a password, then *Install and start*
+            - No admin rights needed; starts automatically with Windows
+            - Windows SmartScreen may warn because the file is not code-signed: *More info* → *Run anyway*
+            - Uninstall from *Settings → Apps* or from the SelfDesk window
+
+            Built from ${{ github.sha }}.
+          files: selfdesk/agent/dist/SelfDeskAgent.exe

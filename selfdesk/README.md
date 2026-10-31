@@ -85,9 +85,36 @@ Inside the house only, `http://<server-pc-ip>:8080` is enough.
 
 Copy the `agent/` folder to the PC.
 
-**Windows** (install Python 3.10+ from python.org first, tick *Add to PATH*):
-double-click `install-windows.bat`, enter the server URL, enroll token, a name and a
-password for this PC. It starts automatically every time you log in.
+**Windows (easiest): one file, `SelfDeskAgent.exe`**
+
+1. Download `SelfDeskAgent.exe` from this repository's
+   [Releases](https://github.com/faisalkazi123-code/Self-Wallet/releases) page (look for
+   *SelfDesk Agent for Windows*), or from the latest *SelfDesk Windows agent* run under
+   **Actions** → Artifacts.
+2. Double-click it. If SmartScreen says "Windows protected your PC", click
+   *More info* → *Run anyway* (the file isn't code-signed).
+3. Enter server URL, enroll token, a name and a password → **Install and start**.
+4. The window shows the **Device ID** and a green *Online* status. Done.
+
+No Python and no admin rights needed. It installs to `%LOCALAPPDATA%\SelfDesk`, starts
+with Windows, appears in the Start menu as *SelfDesk* (Device ID, status, change password,
+uninstall) and in *Settings → Apps* for uninstalling. Double-clicking a newer
+`SelfDeskAgent.exe` offers an **Update** button and keeps the same Device ID.
+
+*For a company:* put a `selfdesk-defaults.json` next to the exe so employees only type
+a name and a password:
+```json
+{"server": "https://desk.mycompany.com", "token": "YOUR_ENROLL_TOKEN", "lock": true}
+```
+or install silently (e.g. via a login script):
+```
+SelfDeskAgent.exe --install --server https://desk.mycompany.com --token TOKEN --name "%COMPUTERNAME%" --password PASS
+SelfDeskAgent.exe --uninstall --quiet
+```
+Build it yourself on Windows with `agent\build-exe.bat`.
+
+**Windows with Python** (alternative): install Python 3.10+, then double-click
+`install-windows.bat`.
 
 **Linux** (X11 desktop): `./install-linux.sh`
 
@@ -102,12 +129,6 @@ System Settings → Privacy & Security.
 The agent prints the **Device ID**. Change the password later with
 `python agent.py --set-password`.
 
-Optional single `.exe` for Windows PCs without Python:
-```bash
-pip install pyinstaller
-pyinstaller --onefile --noconsole --name SelfDeskAgent agent.py
-# run once from a console to set up: SelfDeskAgent.exe --server ... --token ... --name ... --password ...
-```
 
 ## Step 3: Connect
 
@@ -137,7 +158,7 @@ open-source, self-hostable alternative.
 
 **1. सर्वर (एक बार):** एक छोटा क्लाउड VPS लें, उस पर डोमेन लगाएँ, फिर `selfdesk` फ़ोल्डर में `.env` भरकर `docker compose up -d` चलाएँ। HTTPS अपने आप लग जाएगा।
 
-**2. हर PC पर एजेंट:** `agent` फ़ोल्डर कॉपी करें। Windows पर पहले python.org से Python इंस्टॉल करें (*Add to PATH* टिक करें), फिर `install-windows.bat` पर डबल-क्लिक करें। सर्वर URL, enroll token, PC का नाम और पासवर्ड डालें। अब यह हर लॉगिन पर अपने आप चलेगा और Device ID दिखाएगा।
+**2. हर PC पर एजेंट:** Windows पर GitHub के Releases पेज से `SelfDeskAgent.exe` डाउनलोड करें और डबल-क्लिक करें (Python की ज़रूरत नहीं)। अगर "Windows protected your PC" आए तो *More info* → *Run anyway* दबाएँ। सर्वर URL, enroll token, PC का नाम और पासवर्ड डालें, **Install and start** दबाएँ। विंडो में Device ID और हरा *Online* दिखेगा। यह हर लॉगिन पर अपने आप चलेगा। हटाने के लिए Settings → Apps या Start menu में *SelfDesk* खोलें।
 
 **3. कनेक्ट करें:** किसी भी ब्राउज़र (मोबाइल भी) में अपना सर्वर URL खोलें, access key डालें, PC चुनें, उसका पासवर्ड डालें और **Connect** दबाएँ।
 

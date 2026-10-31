@@ -5,3 +5,5 @@ build/
 dist/
 *.spec
 agent/agent.log
+agent/build_info.py
+agent/icon.ico
