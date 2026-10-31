@@ -31,7 +31,7 @@ jobs:
           "VERSION = `"1.0.${{ github.run_number }}`"" | Out-File -Encoding ascii build_info.py
           python make_icon.py icon.ico
           python -m PyInstaller --noconfirm --onefile --noconsole --name SelfDeskAgent --icon icon.ico `
-            --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 windows_app.py
+            --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 selfdesk_main.py
           Get-Item dist\SelfDeskAgent.exe | Format-List Name, Length
 
       # Real end-to-end test of the packaged exe on a Windows desktop:
@@ -46,9 +46,16 @@ jobs:
           $server = Start-Process python -ArgumentList "server.py" -WorkingDirectory ..\server -PassThru `
             -RedirectStandardError $env:RUNNER_TEMP\server.log
           Start-Sleep 3
-          $p = Start-Process dist\SelfDeskAgent.exe -Wait -PassThru -ArgumentList `
+          $p = Start-Process dist\SelfDeskAgent.exe -PassThru -ArgumentList `
             "--install","--server","http://127.0.0.1:8090","--token","ci-enroll-token-123","--name","CI PC","--password","ci-password-1"
-          if ($p.ExitCode -ne 0) { Get-Content "$env:LOCALAPPDATA\SelfDesk\install-error.txt"; throw "install failed" }
+          $null = $p.Handle   # needed so ExitCode is available after exit
+          $p.WaitForExit()
+          Write-Host "install exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) {
+            Get-ChildItem "$env:LOCALAPPDATA\SelfDesk" -ErrorAction SilentlyContinue
+            foreach ($f in "install-error.txt","crash.log","agent.log") { Write-Host "--- $f"; Get-Content "$env:LOCALAPPDATA\SelfDesk\$f" -ErrorAction SilentlyContinue }
+            throw "install failed with exit code $($p.ExitCode)"
+          }
           $dir = "$env:LOCALAPPDATA\SelfDesk"
           if (-not (Test-Path "$dir\SelfDeskAgent.exe")) { throw "exe was not copied to $dir" }
           $run = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SelfDesk Agent"
