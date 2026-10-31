@@ -47,7 +47,7 @@ jobs:
             -RedirectStandardError $env:RUNNER_TEMP\server.log
           Start-Sleep 3
           $p = Start-Process dist\SelfDeskAgent.exe -PassThru -ArgumentList `
-            "--install","--server","http://127.0.0.1:8090","--token","ci-enroll-token-123","--name","CI PC","--password","ci-password-1"
+            "--install","--server","http://127.0.0.1:8090","--token","ci-enroll-token-123","--name","`"CI PC`"","--password","ci-password-1"
           $null = $p.Handle   # needed so ExitCode is available after exit
           $p.WaitForExit()
           Write-Host "install exit code: $($p.ExitCode)"

@@ -485,6 +485,11 @@ def main():
     ap.add_argument("--token")
     ap.add_argument("--name", default="")
     ap.add_argument("--password")
+
+    def bad_args(msg):  # no console in the exe: raise so it lands in crash.log
+        raise ValueError(f"Bad command line: {msg}\n\n{ap.format_usage()}")
+
+    ap.error = bad_args
     a = ap.parse_args()
 
     if a.run:
